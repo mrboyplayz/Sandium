@@ -2,6 +2,8 @@
 
 #include "../Addresses.hpp"
 
+#include <vector>
+
 namespace api
 {
     void DrawText(const std::string &text, float x, float y, float size, const glm::vec4 &color, TextAlignment alignment, bool shadows)
@@ -22,5 +24,37 @@ namespace api
 #elif __linux__
         addresses::CSDrawTextFunc(safeText.c_str(), flags | 0x40, 0, 0, x, y, size, color[0], color[1], color[2], color[3], nullptr);
 #endif
+    }
+}
+namespace api
+{
+    namespace
+    {
+        struct QueuedText
+        {
+            std::string text;
+            float x, y, size;
+            glm::vec4 color;
+            TextAlignment alignment;
+            bool shadows;
+        };
+        std::vector<QueuedText> textQueue;
+    }
+
+    void QueueText(const std::string &text, float x, float y, float size, const glm::vec4 &color, TextAlignment alignment, bool shadows)
+    {
+        textQueue.push_back({text, x, y, size, color, alignment, shadows});
+    }
+
+    void FlushQueuedTexts()
+    {
+        for (const auto &item : textQueue)
+            DrawText(item.text, item.x, item.y, item.size, item.color, item.alignment, item.shadows);
+        textQueue.clear();
+    }
+
+    void ClearQueuedTexts()
+    {
+        textQueue.clear();
     }
 }

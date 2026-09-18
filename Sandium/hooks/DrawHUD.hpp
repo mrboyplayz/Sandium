@@ -39,5 +39,6 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     addresses::DrawHUDFunc(a, b, c, d);
     api::DrawItemBillboards();
     api::FlushImageLayer(true);
+    api::FlushQueuedTexts(); // Lua UI text on top of the game's HUD
 }
 #endif

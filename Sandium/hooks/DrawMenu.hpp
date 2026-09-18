@@ -59,6 +59,7 @@ int DrawMenuHookFunc(int unk)
     const auto finishMenu = [](int result)
     {
         api::FlushImageLayer(true);
+        api::FlushQueuedTexts();
         return result;
     };
 

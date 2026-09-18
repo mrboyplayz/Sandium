@@ -286,14 +286,14 @@ void LuaManager::Initialize()
 	uiTable["text"] = [](const std::string &text, float x, float y, float size,
 	                     float r, float g, float b, float a, int alignment)
 	{
-		api::DrawText(text, x, y, size, glm::vec4(r, g, b, a),
-		              static_cast<api::TextAlignment>(alignment));
+		api::QueueText(text, x, y, size, glm::vec4(r, g, b, a),
+		               static_cast<api::TextAlignment>(alignment));
 	};
 	uiTable["textShadow"] = [](const std::string &text, float x, float y, float size,
 	                           float r, float g, float b, float a, int alignment)
 	{
-		api::DrawText(text, x, y, size, glm::vec4(r, g, b, a),
-		              static_cast<api::TextAlignment>(alignment), true);
+		api::QueueText(text, x, y, size, glm::vec4(r, g, b, a),
+		               static_cast<api::TextAlignment>(alignment), true);
 	};
 	// Filled rectangle via the image layer (1x1 white texture, stretched).
 	uiTable["rect"] = [](float x, float y, float w, float h,
