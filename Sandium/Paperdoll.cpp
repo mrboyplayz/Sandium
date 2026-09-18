@@ -27,27 +27,21 @@ namespace paperdoll
         bool saveFailed = false;
 
         // ---- throw pose (hold Q with an item in hand) ----
-        // Skeleton anatomy (RosaServer enum.body): 0 pelvis, 1 stomach,
-        // 2 torso, 3 head, 4-6 left arm (shoulder/forearm/hand), 7-9 right
-        // arm, 10-15 legs. Main hand = right arm.
-        constexpr int MAIN_ARM_IDS[] = {7, 8, 9};
-        constexpr int MAIN_HAND_ID = 9;
-        constexpr int OFF_ARM_IDS[] = {4, 5, 6};
-        constexpr int OFF_HAND_ID = 6;
+        // Bone layout (from the vanilla renderer's texture groups): 0-2 head,
+        // 3 torso, 4-6 one arm (upper/lower/hand), 7-9 the other arm,
+        // 10-12 + 13-15 the legs. Empirically 7-9 is the offhand arm.
+        constexpr int MAIN_ARM_START = 4, MAIN_ARM_END = 6, MAIN_HAND_BONE = 6;
+        constexpr int OFF_ARM_START = 7, OFF_ARM_END = 9, OFF_HAND_BONE = 9;
         constexpr float THROW_TURN = 1.04719755f; // 60 degrees: turn the doll to look left
         float throwBlend = 0.0f;             // 0 = normal, 1 = full throw pose
         // Bones are identified by flush geometry, not draw order: every bone
         // emits an outline + a fill capsule, and damaged bones emit a second
         // injury fill (same shape) -- all with the same centroid, while the
         // next bone's capsules sit elsewhere. Centroid changes = new bone.
-        // The paperdoll draw slot is then mapped to the true skeleton bone id
-        // through the client's remap table (dword[282486070 + 25*slot]).
         int paperdollBoneIndex = 0;
         float paperdollLastCx = 0.0f, paperdollLastCy = 0.0f;
         bool paperdollHasCentroid = false;
-        float paperdollRootX = 0.0f, paperdollRootY = 0.0f;
-        const int *tintedArmIds = nullptr;
-        int tintedHandId = -1;
+        int tintedArmStart = 0, tintedArmEnd = 0, tintedHandBone = 0;
         bool sdlKeysResolved = false;
         using SDLKeysFn = const unsigned char *(*)(const unsigned char *);
         SDLKeysFn sdlKeys = nullptr;
@@ -134,9 +128,7 @@ namespace paperdoll
                 float* buffer = &At<float>(verticesRva);
                 // Track which bone this capsule belongs to by centroid: the
                 // outline, fill and injury-overlay flushes of one bone share
-                // geometry; a jump means the next bone started. Capsules far
-                // from the doll anchor are not bones at all (the throw
-                // trajectory arc shares this flush path) -- leave those alone.
+                // geometry; a jump means the next bone started.
                 float cx = 0.0f, cy = 0.0f;
                 for (int v = 0; v < count; ++v)
                 {
@@ -145,18 +137,6 @@ namespace paperdoll
                 }
                 cx /= count;
                 cy /= count;
-                const float dx = cx - paperdollRootX;
-                const float dy = cy - paperdollRootY;
-                if (dx * dx + dy * dy > 280.0f * 280.0f)
-                {
-                    originalFlush();
-                    return;
-                }
-                if (paperdollBoneIndex >= 16)
-                {
-                    originalFlush();
-                    return;
-                }
                 if (!paperdollHasCentroid ||
                     std::fabs(cx - paperdollLastCx) + std::fabs(cy - paperdollLastCy) > 6.0f)
                     ++paperdollBoneIndex;
@@ -165,33 +145,18 @@ namespace paperdoll
                 paperdollHasCentroid = true;
 
                 const bool throwing = throwBlend > 0.01f;
-                int boneId = -1;
-                if (throwing && tintedArmIds && paperdollBoneIndex >= 0 && paperdollBoneIndex < 16)
+                if (throwing && tintedArmEnd > 0 &&
+                    paperdollBoneIndex >= tintedArmStart && paperdollBoneIndex <= tintedArmEnd)
                 {
-                    // remap the draw slot to the real skeleton bone id
-                    boneId = static_cast<int>(At<std::uint32_t>(
-                        0x404A6C + 4ULL * (282486070 + 25ULL * paperdollBoneIndex)));
-                    if (boneId < 0 || boneId > 15)
-                        boneId = -1;
-                }
-                if (throwing && boneId >= 0)
-                {
-                    bool inArm = false;
-                    for (int id : tintedArmIds ? std::initializer_list<int>{tintedArmIds[0], tintedArmIds[1], tintedArmIds[2]} : std::initializer_list<int>{})
-                        if (boneId == id)
-                            inArm = true;
-                    if (inArm)
+                    // highlight the throwing arm green and the hand yellow
+                    // (vertex layout: x y z u v r g b a)
+                    const bool hand = paperdollBoneIndex == tintedHandBone;
+                    for (int v = 0; v < count; ++v)
                     {
-                        // highlight the throwing arm green and the hand yellow
-                        // (vertex layout: x y z u v r g b a)
-                        const bool hand = boneId == tintedHandId;
-                        for (int v = 0; v < count; ++v)
-                        {
-                            buffer[v * 9 + 5] = hand ? 1.0f : 0.15f;
-                            buffer[v * 9 + 6] = hand ? 0.9f : 1.0f;
-                            buffer[v * 9 + 7] = hand ? 0.15f : 0.25f;
-                            buffer[v * 9 + 8] = 1.0f;
-                        }
+                        buffer[v * 9 + 5] = hand ? 1.0f : 0.15f;
+                        buffer[v * 9 + 6] = hand ? 0.9f : 1.0f;
+                        buffer[v * 9 + 7] = hand ? 0.15f : 0.25f;
+                        buffer[v * 9 + 8] = 1.0f;
                     }
                 }
             }
@@ -240,23 +205,22 @@ namespace paperdoll
                                  addresses::Humans[human].inventorySlots[0].numberOfPlaces > 0;
             const bool throwing = QKeyHeld() && (mainItem || offItem);
             throwBlend += ((throwing ? 1.0f : 0.0f) - throwBlend) * 0.18f;
-            // Both hands full: the game drops the offhand item on Q, so the
-            // offhand (left) arm is the one doing the action. Offhand wins.
-            if (offItem)
+            // the throw goes to the main hand when both hold items
+            if (mainItem)
             {
-                tintedArmIds = OFF_ARM_IDS;
-                tintedHandId = OFF_HAND_ID;
+                tintedArmStart = MAIN_ARM_START;
+                tintedArmEnd = MAIN_ARM_END;
+                tintedHandBone = MAIN_HAND_BONE;
             }
             else
             {
-                tintedArmIds = MAIN_ARM_IDS;
-                tintedHandId = MAIN_HAND_ID;
+                tintedArmStart = OFF_ARM_START;
+                tintedArmEnd = OFF_ARM_END;
+                tintedHandBone = OFF_HAND_BONE;
             }
             paperdollBoneIndex = 0;
             paperdollHasCentroid = false;
             paperdollLastCx = paperdollLastCy = 0.0f;
-            paperdollRootX = x;
-            paperdollRootY = y;
 
             // DrawPaperdoll builds its 3D matrix from Human::viewYaw. Offset that
             // source value only during this call, so the actual paperdoll camera
