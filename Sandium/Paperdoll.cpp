@@ -240,16 +240,17 @@ namespace paperdoll
                                  addresses::Humans[human].inventorySlots[0].numberOfPlaces > 0;
             const bool throwing = QKeyHeld() && (mainItem || offItem);
             throwBlend += ((throwing ? 1.0f : 0.0f) - throwBlend) * 0.18f;
-            // the throw goes to the main (right) hand when both hold items
-            if (mainItem)
-            {
-                tintedArmIds = MAIN_ARM_IDS;
-                tintedHandId = MAIN_HAND_ID;
-            }
-            else
+            // Both hands full: the game drops the offhand item on Q, so the
+            // offhand (left) arm is the one doing the action. Offhand wins.
+            if (offItem)
             {
                 tintedArmIds = OFF_ARM_IDS;
                 tintedHandId = OFF_HAND_ID;
+            }
+            else
+            {
+                tintedArmIds = MAIN_ARM_IDS;
+                tintedHandId = MAIN_HAND_ID;
             }
             paperdollBoneIndex = 0;
             paperdollHasCentroid = false;
