@@ -16,6 +16,7 @@ add_library(
     api/Time.cpp
     api/Video.cpp
     api/Http.cpp
+    api/Billboards.cpp
 
     # Struct source files
     structs/Human.cpp

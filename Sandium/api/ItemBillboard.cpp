@@ -83,6 +83,14 @@ namespace api
                 continue;
             if (carried[i])
                 continue; // held or holstered on a human
+            // contained inside another item (e.g. a magazine in a gun):
+            // uninteractive through the crosshair, never prompt for it
+            if (item.parentItemID >= 0 && static_cast<std::size_t>(item.parentItemID) < structs::Item::VanillaCount &&
+                addresses::Items[item.parentItemID].isActive.b1)
+                continue;
+            if (item.parentHumanID >= 0 && static_cast<std::size_t>(item.parentHumanID) < structs::Human::VanillaCount &&
+                addresses::Humans[item.parentHumanID].isActive.b1)
+                continue;
 
             const float dx = item.position.x - camera[0];
             const float dy = item.position.y - camera[1];

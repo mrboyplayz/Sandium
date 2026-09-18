@@ -16,6 +16,7 @@
 #include "api/Video.hpp"
 #include "api/Image.hpp"
 #include "api/Text.hpp"
+#include "api/Billboards.hpp"
 #include "ServerMedia.hpp"
 #include "Roster.hpp"
 #include "hooks/CreateItem.hpp"
@@ -232,6 +233,48 @@ void LuaManager::Initialize()
 			return human.bones[index];
 		}
 	);
+
+	// World billboards: images/videos anchored to a world position,
+	// stretched to width x height (world units), faded by opacity, hidden
+	// beyond distance (0 = unlimited). Must be created from Lua; drawn
+	// automatically every frame while in-game.
+	this->_L->new_usertype<api::Billboard>(
+		"Billboard",
+		sol::no_constructor,
+		"x", &api::Billboard::x,
+		"y", &api::Billboard::y,
+		"z", &api::Billboard::z,
+		"width", &api::Billboard::width,
+		"height", &api::Billboard::height,
+		"distance", &api::Billboard::maxDistance,
+		"opacity", &api::Billboard::opacity,
+		"visible", &api::Billboard::visible,
+		"SetPosition", [](api::Billboard &b, float x, float y, float z) { b.x = x; b.y = y; b.z = z; },
+		"Destroy", [](api::Billboard &b) { b.Destroy(); }
+	);
+	sol::table billboardsTable = this->_L->create_named_table("Billboards");
+	billboardsTable["Create"] = [](sol::table opts)
+	{
+		auto billboard = std::make_shared<api::Billboard>();
+		sol::object image = opts["image"];
+		sol::object video = opts["video"];
+		if (image.is<std::string>())
+			billboard->image = api::Image::Load(image.as<std::string>());
+		else if (video.is<std::shared_ptr<api::Video>>())
+			billboard->video = video.as<std::shared_ptr<api::Video>>();
+		else
+			return billboard;
+		billboard->x = opts.get_or("x", 0.0f);
+		billboard->y = opts.get_or("y", 0.0f);
+		billboard->z = opts.get_or("z", 0.0f);
+		billboard->width = opts.get_or("width", 2.0f);
+		billboard->height = opts.get_or("height", 1.5f);
+		billboard->maxDistance = opts.get_or("distance", 0.0f);
+		billboard->opacity = opts.get_or("opacity", 1.0f);
+		api::billboards::Register(billboard);
+		return billboard;
+	};
+	billboardsTable["Clear"] = []() { api::billboards::Clear(); };
 
 	// Custom UI API -- usable inside DrawHUD/DrawMenu hooks. Coordinates are
 	// the game's 1024x768 UI space. Alignment: 0 right-anchored, 1 center,
