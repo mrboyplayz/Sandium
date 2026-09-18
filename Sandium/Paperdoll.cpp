@@ -45,6 +45,7 @@ namespace paperdoll
         int paperdollBoneIndex = 0;
         float paperdollLastCx = 0.0f, paperdollLastCy = 0.0f;
         bool paperdollHasCentroid = false;
+        float paperdollRootX = 0.0f, paperdollRootY = 0.0f;
         const int *tintedArmIds = nullptr;
         int tintedHandId = -1;
         bool sdlKeysResolved = false;
@@ -133,7 +134,9 @@ namespace paperdoll
                 float* buffer = &At<float>(verticesRva);
                 // Track which bone this capsule belongs to by centroid: the
                 // outline, fill and injury-overlay flushes of one bone share
-                // geometry; a jump means the next bone started.
+                // geometry; a jump means the next bone started. Capsules far
+                // from the doll anchor are not bones at all (the throw
+                // trajectory arc shares this flush path) -- leave those alone.
                 float cx = 0.0f, cy = 0.0f;
                 for (int v = 0; v < count; ++v)
                 {
@@ -142,6 +145,18 @@ namespace paperdoll
                 }
                 cx /= count;
                 cy /= count;
+                const float dx = cx - paperdollRootX;
+                const float dy = cy - paperdollRootY;
+                if (dx * dx + dy * dy > 280.0f * 280.0f)
+                {
+                    originalFlush();
+                    return;
+                }
+                if (paperdollBoneIndex >= 16)
+                {
+                    originalFlush();
+                    return;
+                }
                 if (!paperdollHasCentroid ||
                     std::fabs(cx - paperdollLastCx) + std::fabs(cy - paperdollLastCy) > 6.0f)
                     ++paperdollBoneIndex;
@@ -239,6 +254,8 @@ namespace paperdoll
             paperdollBoneIndex = 0;
             paperdollHasCentroid = false;
             paperdollLastCx = paperdollLastCy = 0.0f;
+            paperdollRootX = x;
+            paperdollRootY = y;
 
             // DrawPaperdoll builds its 3D matrix from Human::viewYaw. Offset that
             // source value only during this call, so the actual paperdoll camera
