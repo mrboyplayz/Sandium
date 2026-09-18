@@ -27,21 +27,26 @@ namespace paperdoll
         bool saveFailed = false;
 
         // ---- throw pose (hold Q with an item in hand) ----
-        // Bone layout (from the vanilla renderer's texture groups): 0-2 head,
-        // 3 torso, 4-6 one arm (upper/lower/hand), 7-9 the other arm,
-        // 10-12 + 13-15 the legs. Empirically 7-9 is the offhand arm.
-        constexpr int MAIN_ARM_START = 4, MAIN_ARM_END = 6, MAIN_HAND_BONE = 6;
-        constexpr int OFF_ARM_START = 7, OFF_ARM_END = 9, OFF_HAND_BONE = 9;
+        // Skeleton anatomy (RosaServer enum.body): 0 pelvis, 1 stomach,
+        // 2 torso, 3 head, 4-6 left arm (shoulder/forearm/hand), 7-9 right
+        // arm, 10-15 legs. Main hand = right arm.
+        constexpr int MAIN_ARM_IDS[] = {7, 8, 9};
+        constexpr int MAIN_HAND_ID = 9;
+        constexpr int OFF_ARM_IDS[] = {4, 5, 6};
+        constexpr int OFF_HAND_ID = 6;
         constexpr float THROW_TURN = 1.04719755f; // 60 degrees: turn the doll to look left
         float throwBlend = 0.0f;             // 0 = normal, 1 = full throw pose
         // Bones are identified by flush geometry, not draw order: every bone
         // emits an outline + a fill capsule, and damaged bones emit a second
         // injury fill (same shape) -- all with the same centroid, while the
         // next bone's capsules sit elsewhere. Centroid changes = new bone.
+        // The paperdoll draw slot is then mapped to the true skeleton bone id
+        // through the client's remap table (dword[282486070 + 25*slot]).
         int paperdollBoneIndex = 0;
         float paperdollLastCx = 0.0f, paperdollLastCy = 0.0f;
         bool paperdollHasCentroid = false;
-        int tintedArmStart = 0, tintedArmEnd = 0, tintedHandBone = 0;
+        const int *tintedArmIds = nullptr;
+        int tintedHandId = -1;
         bool sdlKeysResolved = false;
         using SDLKeysFn = const unsigned char *(*)(const unsigned char *);
         SDLKeysFn sdlKeys = nullptr;
@@ -145,18 +150,33 @@ namespace paperdoll
                 paperdollHasCentroid = true;
 
                 const bool throwing = throwBlend > 0.01f;
-                if (throwing && tintedArmEnd > 0 &&
-                    paperdollBoneIndex >= tintedArmStart && paperdollBoneIndex <= tintedArmEnd)
+                int boneId = -1;
+                if (throwing && tintedArmIds && paperdollBoneIndex >= 0 && paperdollBoneIndex < 16)
                 {
-                    // highlight the throwing arm green and the hand yellow
-                    // (vertex layout: x y z u v r g b a)
-                    const bool hand = paperdollBoneIndex == tintedHandBone;
-                    for (int v = 0; v < count; ++v)
+                    // remap the draw slot to the real skeleton bone id
+                    boneId = static_cast<int>(At<std::uint32_t>(
+                        0x404A6C + 4ULL * (282486070 + 25ULL * paperdollBoneIndex)));
+                    if (boneId < 0 || boneId > 15)
+                        boneId = -1;
+                }
+                if (throwing && boneId >= 0)
+                {
+                    bool inArm = false;
+                    for (int id : tintedArmIds ? std::initializer_list<int>{tintedArmIds[0], tintedArmIds[1], tintedArmIds[2]} : std::initializer_list<int>{})
+                        if (boneId == id)
+                            inArm = true;
+                    if (inArm)
                     {
-                        buffer[v * 9 + 5] = hand ? 1.0f : 0.15f;
-                        buffer[v * 9 + 6] = hand ? 0.9f : 1.0f;
-                        buffer[v * 9 + 7] = hand ? 0.15f : 0.25f;
-                        buffer[v * 9 + 8] = 1.0f;
+                        // highlight the throwing arm green and the hand yellow
+                        // (vertex layout: x y z u v r g b a)
+                        const bool hand = boneId == tintedHandId;
+                        for (int v = 0; v < count; ++v)
+                        {
+                            buffer[v * 9 + 5] = hand ? 1.0f : 0.15f;
+                            buffer[v * 9 + 6] = hand ? 0.9f : 1.0f;
+                            buffer[v * 9 + 7] = hand ? 0.15f : 0.25f;
+                            buffer[v * 9 + 8] = 1.0f;
+                        }
                     }
                 }
             }
@@ -205,18 +225,16 @@ namespace paperdoll
                                  addresses::Humans[human].inventorySlots[0].numberOfPlaces > 0;
             const bool throwing = QKeyHeld() && (mainItem || offItem);
             throwBlend += ((throwing ? 1.0f : 0.0f) - throwBlend) * 0.18f;
-            // the throw goes to the main hand when both hold items
+            // the throw goes to the main (right) hand when both hold items
             if (mainItem)
             {
-                tintedArmStart = MAIN_ARM_START;
-                tintedArmEnd = MAIN_ARM_END;
-                tintedHandBone = MAIN_HAND_BONE;
+                tintedArmIds = MAIN_ARM_IDS;
+                tintedHandId = MAIN_HAND_ID;
             }
             else
             {
-                tintedArmStart = OFF_ARM_START;
-                tintedArmEnd = OFF_ARM_END;
-                tintedHandBone = OFF_HAND_BONE;
+                tintedArmIds = OFF_ARM_IDS;
+                tintedHandId = OFF_HAND_ID;
             }
             paperdollBoneIndex = 0;
             paperdollHasCentroid = false;
