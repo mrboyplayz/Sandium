@@ -7,6 +7,8 @@
 #include <thread>
 
 #include "Addresses.hpp"
+#include "api/Http.hpp"
+#include <cstdlib>
 
 #if _WIN32
 #include <winsock2.h>
@@ -33,7 +35,17 @@ namespace phone
         constexpr const char *MASTER_HOST_ENV = "SANDIUM_MASTER";
         constexpr uint16_t MASTER_HTTP_PORT = 80;
 
+        const char *httpHost()
+        {
+            static char envHost[64];
+            if (GetEnvironmentVariableA(MASTER_HOST_ENV, envHost, sizeof(envHost)) > 0)
+                return envHost;
+            return MASTER_HOST;
+        }
+        uint16_t httpPort() { return MASTER_HTTP_PORT; }
+
         // Client state indices (from the client decomp).
+        constexpr uint32_t IDX_TOKEN = 134050334; // join-packet identity token
         constexpr uint32_t IDX_PHONE = 134050337;
         constexpr uint32_t IDX_ACCEPT = 134050338;
         constexpr uint32_t IDX_AUTH_STATE = 179668277;
@@ -69,10 +81,7 @@ namespace phone
             if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
                 return "";
 
-            const char *host = MASTER_HOST;
-            char envHost[64];
-            if (GetEnvironmentVariableA(MASTER_HOST_ENV, envHost, sizeof(envHost)) > 0)
-                host = envHost;
+            const char *host = httpHost();
 
             struct addrinfo hints{};
             hints.ai_family = AF_INET;
@@ -157,15 +166,30 @@ namespace phone
             if (key.empty())
                 key = "default";
 
-            const uint32_t phoneInt = PhoneStringToInt(FetchPhone(key));
-            if (phoneInt)
+            const std::string phoneBody = FetchPhone(key);
+            const uint32_t phoneInt = PhoneStringToInt(phoneBody);
+            // Unique identity token: the server keys accounts on the
+            // (token, session) pair of the join packet. Without this every
+            // client sends token=-1 and the server merges all players.
+            uint32_t tokenInt = 0;
+            {
+                const std::string body = http::Get(httpHost(), httpPort(),
+                                                   "/token?account=" + key, 3000,
+                                                   "SANDIUM_MASTER");
+                tokenInt = (uint32_t)std::strtoull(body.c_str(), nullptr, 10);
+                if (tokenInt == 0xFFFFFFFFu)
+                    tokenInt = 0;
+            }
+            if (phoneInt || tokenInt)
             {
                 uint32_t *phone = StatePtr(IDX_PHONE);
+                uint32_t *token = StatePtr(IDX_TOKEN);
                 uint32_t *accept = StatePtr(IDX_ACCEPT);
                 uint32_t *state = StatePtr(IDX_AUTH_STATE);
-                if (phone && accept && state)
+                if (phone) *phone = phoneInt;
+                if (token && tokenInt) *token = tokenInt;
+                if (accept && state)
                 {
-                    *phone = phoneInt;
                     *accept = 1;
                     *state = 2; // menu switches to the "%03d-%04d" display
                 }
