@@ -19,6 +19,7 @@
 #include "api/Billboards.hpp"
 #include "ServerMedia.hpp"
 #include "Roster.hpp"
+#include "Flags.hpp"
 #include "hooks/CreateItem.hpp"
 #include "hooks/CreateVehicle.hpp"
 #include "structs/Item.hpp"
@@ -275,6 +276,8 @@ void LuaManager::Initialize()
 		return billboard;
 	};
 	billboardsTable["Clear"] = []() { api::billboards::Clear(); };
+	sol::table flagsTable = this->_L->create_named_table("ServerFlags");
+	flagsTable["Get"] = [](const std::string &name) { return flags::Get(name); };
 
 	// Custom UI API -- usable inside DrawHUD/DrawMenu hooks. Coordinates are
 	// the game's 1024x768 UI space. Alignment: 0 right-anchored, 1 center,
@@ -314,6 +317,7 @@ void LuaManager::Initialize()
 	mediaTable["Path"] = &servermedia::Path;
 	servermedia::Sync(); // kick off the download as soon as Lua is up
 	roster::Start(); // name -> phone roster for name highlighting
+	flags::Start(); // live server flags for streamed content
 
 	sol::table humansTable = this->_L->create_named_table("Humans");
 	humansTable["GetAll"] = [](const sol::this_state &state)

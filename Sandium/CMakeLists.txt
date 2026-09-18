@@ -41,6 +41,7 @@ add_library(
     NetRedirect.cpp
     ServerMedia.cpp
     Roster.cpp
+    Flags.cpp
     TypeManager.cpp
     Version.cpp
 
