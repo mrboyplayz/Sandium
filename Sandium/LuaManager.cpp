@@ -17,6 +17,7 @@
 #include "api/Image.hpp"
 #include "api/Text.hpp"
 #include "ServerMedia.hpp"
+#include "Roster.hpp"
 #include "hooks/CreateItem.hpp"
 #include "hooks/CreateVehicle.hpp"
 #include "structs/Item.hpp"
@@ -269,6 +270,7 @@ void LuaManager::Initialize()
 	mediaTable["Ready"] = &servermedia::Ready;
 	mediaTable["Path"] = &servermedia::Path;
 	servermedia::Sync(); // kick off the download as soon as Lua is up
+	roster::Start(); // name -> phone roster for name highlighting
 
 	sol::table humansTable = this->_L->create_named_table("Humans");
 	humansTable["GetAll"] = [](const sol::this_state &state)

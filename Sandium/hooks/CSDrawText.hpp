@@ -26,6 +26,7 @@ std::int64_t CSDrawTextHookFunc(const char *format, unsigned int flags, int a, i
 #include <sstream>
 
 #include "../Addresses.hpp"
+#include "../Roster.hpp"
 #include "../Version.hpp"
 
 subhook::Hook *csDrawTextHook;
@@ -146,7 +147,17 @@ std::int64_t CSDrawTextHookFunc(const char *format, float x, float y, float size
         return addresses::CSDrawTextFunc("Connecting...", x, y, size, newFlags, red, green, blue, alpha);
     }
 
-    return addresses::CSDrawTextFunc(newFormatStream.str().c_str(), x, y, size, newFlags, red, green, blue, alpha);
+    // Gold name: account holding phone 256-0001 renders yellow everywhere
+    // its name is drawn (nametags, lists) -- exact rendered-text match.
+    std::string rendered = newFormatStream.str();
+    if (roster::PhoneForName(rendered) == 2560001)
+    {
+        red = 1.0f;
+        green = 0.85f;
+        blue = 0.2f;
+    }
+
+    return addresses::CSDrawTextFunc(rendered.c_str(), x, y, size, newFlags, red, green, blue, alpha);
 }
 #elif __linux__
 std::int64_t CSDrawTextHookFunc(const char *format, unsigned int flags, int a, int b, float x, float y, float scale, float red, float green, float blue, float alpha, void *c)

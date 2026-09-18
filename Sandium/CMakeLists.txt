@@ -39,6 +39,7 @@ add_library(
     Phone.cpp
     NetRedirect.cpp
     ServerMedia.cpp
+    Roster.cpp
     TypeManager.cpp
     Version.cpp
 
