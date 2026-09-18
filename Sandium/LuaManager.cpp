@@ -14,6 +14,8 @@
 #include "api/Image.hpp"
 #include "api/Time.hpp"
 #include "api/Video.hpp"
+#include "api/Image.hpp"
+#include "api/Text.hpp"
 #include "ServerMedia.hpp"
 #include "hooks/CreateItem.hpp"
 #include "hooks/CreateVehicle.hpp"
@@ -229,6 +231,35 @@ void LuaManager::Initialize()
 			return human.bones[index];
 		}
 	);
+
+	// Custom UI API -- usable inside DrawHUD/DrawMenu hooks. Coordinates are
+	// the game's 1024x768 UI space. Alignment: 0 right-anchored, 1 center,
+	// 2 left, 3 up, 4 down (the game's own alignment codes).
+	sol::table uiTable = this->_L->create_named_table("UI");
+	uiTable["text"] = [](const std::string &text, float x, float y, float size,
+	                     float r, float g, float b, float a, int alignment)
+	{
+		api::DrawText(text, x, y, size, glm::vec4(r, g, b, a),
+		              static_cast<api::TextAlignment>(alignment));
+	};
+	uiTable["textShadow"] = [](const std::string &text, float x, float y, float size,
+	                           float r, float g, float b, float a, int alignment)
+	{
+		api::DrawText(text, x, y, size, glm::vec4(r, g, b, a),
+		              static_cast<api::TextAlignment>(alignment), true);
+	};
+	// Filled rectangle via the image layer (1x1 white texture, stretched).
+	uiTable["rect"] = [](float x, float y, float w, float h,
+	                     float r, float g, float b, float a)
+	{
+		static std::shared_ptr<api::Image> white;
+		if (!white || !white->IsValid())
+		{
+			white = api::Image::Load("sandium/models/white.png");
+			white->SetLayer(-10);
+		}
+		white->Draw(x, y, w, h, r, g, b, a);
+	};
 
 	sol::table gameTable = this->_L->create_named_table("Game");
 	gameTable["isInGame"] = []() { return addresses::IsInGame.ptr && addresses::IsInGame.ptr->b1; };
