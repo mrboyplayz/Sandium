@@ -1,0 +1,8 @@
+{
+    "conflicts": [],
+    "description": "Loads and draws a PNG using Suitium's Lua image API.",
+    "disabled": true,
+    "id": "image_api_example",
+    "name": "Lua Image API Example",
+    "requires": []
+}

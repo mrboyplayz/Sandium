@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>Sub Rosa Pose Tool</title>
+<style>
+  :root { --bg:#14181f; --panel:#1d232d; --edge:#2c3542; --text:#cfd8e3; --accent:#4aa3df; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui, sans-serif; display:flex; height:100vh; }
+  #side { width:300px; background:var(--panel); border-right:1px solid var(--edge); padding:12px; overflow-y:auto; flex-shrink:0; }
+  #viewWrap { flex:1; position:relative; }
+  canvas { display:block; width:100%; height:100%; cursor:grab; }
+  h1 { font-size:16px; margin:0 0 8px; }
+  .hint { color:#8494a7; font-size:12px; margin:6px 0; }
+  #parts { display:grid; grid-template-columns:1fr 1fr; gap:4px; margin:8px 0; }
+  #parts button { background:#242c38; color:var(--text); border:1px solid var(--edge); border-radius:4px; padding:5px 4px; font-size:12px; cursor:pointer; }
+  #parts button.active { background:var(--accent); color:#0b1520; font-weight:bold; }
+  #parts button.dirty { border-color:#e0a23c; }
+  .slider { display:grid; grid-template-columns:34px 1fr 52px; align-items:center; gap:6px; margin:4px 0; }
+  .slider input[type=range] { width:100%; }
+  .slider .val { text-align:right; font-family:monospace; font-size:12px; }
+  button.action { width:100%; margin-top:6px; background:#2c3a4d; color:var(--text); border:1px solid var(--edge); border-radius:4px; padding:7px; cursor:pointer; }
+  button.action:hover { background:#354760; }
+  #json { width:100%; height:180px; background:#0e1218; color:#9ecb82; border:1px solid var(--edge); border-radius:4px; font:11px monospace; margin-top:8px; white-space:pre; }
+  .copied { color:#6fca6f; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>Sub Rosa Pose Tool</h1>
+  <div class="hint">Click a body part (or list) to select. Drag on the model to rotate the selected part. Drag empty space to orbit the camera. Wheel = zoom.</div>
+  <div id="parts"></div>
+  <div class="slider"><span>X</span><input type="range" id="rx" min="-180" max="180" value="0"><span class="val" id="rxv">0°</span></div>
+  <div class="slider"><span>Y</span><input type="range" id="ry" min="-180" max="180" value="0"><span class="val" id="ryv">0°</span></div>
+  <div class="slider"><span>Z</span><input type="range" id="rz" min="-180" max="180" value="0"><span class="val" id="rzv">0°</span></div>
+  <button class="action" id="resetPart">Reset selected part</button>
+  <button class="action" id="resetAll">Reset whole pose</button>
+  <button class="action" id="copy">Copy JSON</button>
+  <span class="hint" id="copyState"></span>
+  <textarea id="json" readonly></textarea>
+  <div class="hint">Format matches Alpha 38 human packets: 16 parts, each a quaternion stored smallest-three (2-bit largest-component index + 3×12-bit signed components, [-1,1] ≈ [0,4095]). Network packets additionally delta-compress these against the previous state. Limb health mapping: chest=1, head=2, leftArm=3, rightArm=4, leftLeg=5, rightLeg=6.</div>
+</div>
+<div id="viewWrap"><canvas id="view"></canvas></div>
+<script>
+"use strict";
+// ---- rig: 16 parts, offsets relative to parent pivot, box half-extents ----
+// Sub Rosa's blocky suit guy. Units roughly metres, Y up.
+const PARTS = [
+  { name:"pelvis",        parent:-1, off:[0,0,0],       size:[.36,.22,.24], color:"#3a4756" },
+  { name:"chest",         parent:0,  off:[0,.30,0],     size:[.44,.44,.26], color:"#46586e" },
+  { name:"head",          parent:1,  off:[0,.38,0],     size:[.24,.26,.24], color:"#c9a184" },
+  { name:"leftUpperArm",  parent:1,  off:[-.33,.16,0],  size:[.14,.30,.14], color:"#46586e" },
+  { name:"leftForearm",   parent:3,  off:[0,-.32,0],    size:[.12,.28,.12], color:"#c9a184" },
+  { name:"leftHand",      parent:4,  off:[0,-.30,0],    size:[.10,.12,.10], color:"#c9a184" },
+  { name:"rightUpperArm", parent:1,  off:[.33,.16,0],   size:[.14,.30,.14], color:"#46586e" },
+  { name:"rightForearm",  parent:6,  off:[0,-.32,0],    size:[.12,.28,.12], color:"#c9a184" },
+  { name:"rightHand",     parent:7,  off:[0,-.30,0],    size:[.10,.12,.10], color:"#c9a184" },
+  { name:"leftThigh",     parent:0,  off:[-.13,-.26,0], size:[.16,.34,.16], color:"#333d4a" },
+  { name:"leftShin",      parent:9,  off:[0,-.38,0],    size:[.13,.34,.13], color:"#2b333e" },
+  { name:"leftFoot",      parent:10, off:[0,-.36,.06],  size:[.14,.10,.26], color:"#20262e" },
+  { name:"rightThigh",    parent:0,  off:[.13,-.26,0],  size:[.16,.34,.16], color:"#333d4a" },
+  { name:"rightShin",     parent:12, off:[0,-.38,0],    size:[.13,.34,.13], color:"#2b333e" },
+  { name:"rightFoot",     parent:14, off:[0,-.36,.06],  size:[.14,.10,.26], color:"#20262e" },
+  { name:"neck",          parent:1,  off:[0,.26,0],     size:[.12,.10,.12], color:"#c9a184" },
+];
+// chest parent pivot fix: head/neck attach near top of chest
+PARTS[2].off = [0,.34,0];
+
+// ---- quaternion helpers (w,x,y,z order internally; packet order q,x,y,z) ----
+const IDENT = [1,0,0,0]; // w,x,y,z
+function qMul(a,b){ return [
+  a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+  a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+  a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+  a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]]; }
+function qFromEuler(rx,ry,rz){ // degrees, Z then X then Y (arbitrary but stable)
+  const d=Math.PI/180, cx=Math.cos(rx*d/2), sx=Math.sin(rx*d/2),
+        cy=Math.cos(ry*d/2), sy=Math.sin(ry*d/2),
+        cz=Math.cos(rz*d/2), sz=Math.sin(rz*d/2);
+  return [ cx*cy*cz + sx*sy*sz, sx*cy*cz - cx*sy*sz, cx*sy*cz + sx*cy*sz, cx*cy*sz - sx*sy*cz ]; }
+function qNormalize(q){ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; return q.map(v=>v/l); }
+function qRotate(q, v){ // rotate vector by quaternion
+  const [w,x,y,z]=q, [vx,vy,vz]=v;
+  const tx=2*(y*vz-z*vy), ty=2*(z*vx-x*vz), tz=2*(x*vy-y*vx);
+  return [ vx + w*tx + (y*tz-z*ty), vy + w*ty + (z*tx-x*tz), vz + w*tz + (x*ty-y*tx) ]; }
+
+// pose state: euler degrees per part
+const pose = PARTS.map(()=>({x:0,y:0,z:0}));
+let selected = 1;
+
+// ---- smallest-three packing (matches "2 bit Q + 3x12 bit" packet layout) ----
+function packQuat(q){
+  const n = qNormalize(q);
+  let largest = 0, mag = Math.abs(n[0]);
+  for (let i=1;i<4;i++) if (Math.abs(n[i])>mag){ largest=i; mag=Math.abs(n[i]); }
+  if (n[largest]<0){ n[0]=-n[0]; n[1]=-n[1]; n[2]=-n[2]; n[3]=-n[3]; }
+  const others=[0,1,2,3].filter(i=>i!==largest);
+  const packed = others.map(i => Math.round((n[i]+1)/2*4095)); // [-1,1] -> [0,4095]
+  return { q:largest, v:packed }; // q = omitted (largest) component index
+}
+
+// ---- rendering: tiny box painter ----
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+let camYaw = 0.6, camPitch = 0.25, camDist = 4.2;
+
+function resize(){ canvas.width = canvas.clientWidth*devicePixelRatio; canvas.height = canvas.clientHeight*devicePixelRatio; }
+window.addEventListener("resize", resize); resize();
+
+function partWorldTransform(i, acc){
+  const p = PARTS[i], e = pose[i], local = qFromEuler(e.x,e.y,e.z);
+  const q = acc ? qMul(acc.q, local) : local;
+  const off = qRotate(local, p.off);
+  const pos = acc ? [ acc.pos[0]+off[0], acc.pos[1]+off[1], acc.pos[2]+off[2] ] : off.slice();
+  return { q, pos };
+}
+function boxCorners(size){
+  const [x,y,z]=size, c=[];
+  for (const sx of [-1,1]) for (const sy of [-1,1]) for (const sz of [-1,1]) c.push([sx*x/2, sy*y/2, sz*z/2]);
+  return c;
+}
+const FACES = [[0,1,3,2],[4,6,7,5],[0,2,6,4],[1,7,5,3],[0,4,5,1],[2,3,7,6]];
+
+function draw(){
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  const W=canvas.clientWidth, H=canvas.clientHeight;
+  ctx.fillStyle="#10141a"; ctx.fillRect(0,0,W,H);
+  const cy=Math.cos(camYaw), sy=Math.sin(camYaw), cp=Math.cos(camPitch), sp=Math.sin(camPitch);
+  const cam=[camDist*cy*cp, camDist*sp, camDist*sy*cp];
+  const project = p => {
+    const dx=p[0]-cam[0], dy=p[1]-cam[1], dz=p[2]-cam[2];
+    // camera basis looking at origin, up = Y
+    const fwd=[-cam[0],-cam[1],-cam[2]], fl=Math.hypot(...fwd);
+    const f=[fwd[0]/fl,fwd[1]/fl,fwd[2]/fl];
+    let r=[f[2],0,-f[0]], rl=Math.hypot(...r)||1; r=[r[0]/rl,r[1]/rl,r[2]/rl];
+    const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+    const cz=dx*f[0]+dy*f[1]+dz*f[2];
+    const cx=dx*r[0]+dy*r[1]+dz*r[2], cyy=dx*u[0]+dy*u[1]+dz*u[2];
+    const scale=H*1.1/Math.max(cz,0.1);
+    return { x:W/2+cx*scale, y:H/2-cyy*scale, z:cz };
+  };
+  // ground shadow disc
+  ctx.fillStyle="rgba(0,0,0,.35)";
+  ctx.beginPath(); ctx.ellipse(W/2,H/2+ (project([0,-.95,0]).y - H/2)*-1 + H*0.28, 130, 34, 0, 0, Math.PI*2); ctx.fill();
+
+  const boxes=[];
+  PARTS.forEach((p,i)=>{
+    const t = partWorldTransform(i);
+    const corners = boxCorners(p.size).map(c=>{
+      const world=[ t.pos[0]+qRotate(t.q,c)[0], t.pos[1]+qRotate(t.q,c)[1], t.pos[2]+qRotate(t.q,c)[2] ];
+      return { p:project(world), world };
+    });
+    boxes.push({i, corners, color:p.color, depth: corners.reduce((s,c)=>s+c.p.z,0)/8});
+  });
+  boxes.sort((a,b)=>b.depth-a.depth);
+  for (const b of boxes){
+    for (let fi=0; fi<6; fi++){
+      const f=FACES[fi];
+      const pts=f.map(idx=>b.corners[idx].p);
+      // face normal in world space for shading
+      const a=b.corners[f[0]].world, c1=b.corners[f[1]].world, c2=b.corners[f[2]].world;
+      const u=[c1[0]-a[0],c1[1]-a[1],c1[2]-a[2]], v=[c2[0]-a[0],c2[1]-a[1],c2[2]-a[2]];
+      const n=[u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]];
+      const nl=Math.hypot(...n)||1;
+      const light=Math.max(0.25, Math.abs((n[0]*0.4+n[1]*0.8+n[2]*0.45)/nl));
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x,pts[0].y);
+      for (let k=1;k<4;k++) ctx.lineTo(pts[k].x,pts[k].y);
+      ctx.closePath();
+      const base=b.color;
+      ctx.fillStyle = shade(base, light);
+      ctx.fill();
+      if (b.i===selected){ ctx.strokeStyle="#ffd75e"; ctx.lineWidth=2; ctx.stroke(); }
+      else { ctx.strokeStyle="rgba(0,0,0,.25)"; ctx.lineWidth=1; ctx.stroke(); }
+    }
+  }
+}
+function shade(hex, light){
+  const r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+  const f=v=>Math.min(255, Math.round(v*light + 18*light));
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
+}
+
+// ---- picking ----
+function pickAt(mx,my){
+  // approximate: choose the part whose screen-projected center is nearest
+  let best=-1, bestD=1e9;
+  PARTS.forEach((p,i)=>{
+    const t=partWorldTransform(i);
+    const cy=Math.cos(camYaw), sy=Math.sin(camYaw), cp=Math.cos(camPitch), sp=Math.sin(camPitch);
+    const cam=[camDist*cy*cp, camDist*sp, camDist*sy*cp];
+    const dx=t.pos[0]-cam[0], dy=t.pos[1]-cam[1], dz=t.pos[2]-cam[2];
+    const fwd=[-cam[0],-cam[1],-cam[2]], fl=Math.hypot(...fwd);
+    const f=[fwd[0]/fl,fwd[1]/fl,fwd[2]/fl];
+    let r=[f[2],0,-f[0]], rl=Math.hypot(...r)||1; r=[r[0]/rl,r[1]/rl,r[2]/rl];
+    const u=[r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+    const cz=dx*f[0]+dy*f[1]+dz*f[2];
+    const cx=dx*r[0]+dy*r[1]+dz*r[2], cyy=dx*u[0]+dy*u[1]+dz*u[2];
+    const scale=canvas.clientHeight*1.1/Math.max(cz,0.1);
+    const sx=canvas.clientWidth/2+cx*scale, syp=canvas.clientHeight/2-cyy*scale;
+    const d=Math.hypot(sx-mx, syp-my);
+    if (d<bestD){ bestD=d; best=i; }
+  });
+  return best;
+}
+
+// ---- input ----
+let dragging=null, lastX=0, lastY=0;
+canvas.addEventListener("mousedown", e=>{
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  const part=pickAt(mx*1, my*1);
+  dragging = part>=0 && part!==-1 ? "part" : "camera";
+  if (dragging==="part" && part!==selected){ selected=part; refreshUI(); }
+  lastX=e.clientX; lastY=e.clientY;
+});
+window.addEventListener("mousemove", e=>{
+  if (!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY;
+  if (dragging==="camera"){ camYaw+=dx*0.008; camPitch=Math.max(-1.2,Math.min(1.2,camPitch+dy*0.008)); }
+  else {
+    const p=pose[selected];
+    p.y+=dx*0.6; p.x+=dy*0.6;
+    p.x=Math.max(-180,Math.min(180,p.x)); p.y=Math.max(-180,Math.min(180,p.y));
+    refreshSliders();
+  }
+  draw();
+});
+window.addEventListener("mouseup", ()=>{ dragging=null; updateJSON(); });
+canvas.addEventListener("wheel", e=>{ camDist=Math.max(1.8,Math.min(9,camDist+e.deltaY*0.003)); draw(); e.preventDefault(); }, {passive:false});
+
+// ---- UI ----
+const partsEl=document.getElementById("parts");
+PARTS.forEach((p,i)=>{
+  const b=document.createElement("button");
+  b.textContent=p.name; b.id="pb"+i;
+  b.onclick=()=>{ selected=i; refreshUI(); draw(); };
+  partsEl.appendChild(b);
+});
+function refreshUI(){
+  PARTS.forEach((_,i)=>{
+    const b=document.getElementById("pb"+i);
+    b.classList.toggle("active", i===selected);
+    const e=pose[i];
+    b.classList.toggle("dirty", e.x||e.y||e.z);
+  });
+  refreshSliders();
+}
+function refreshSliders(){
+  const e=pose[selected];
+  for (const ax of ["x","y","z"]){
+    document.getElementById("r"+ax).value=e[ax];
+    document.getElementById("r"+ax+"v").textContent=Math.round(e[ax])+"°";
+  }
+}
+for (const ax of ["x","y","z"]){
+  document.getElementById("r"+ax).addEventListener("input", e=>{
+    pose[selected][ax]=+e.target.value;
+    document.getElementById("r"+ax+"v").textContent=Math.round(e.target.value)+"°";
+    refreshUI(); draw(); updateJSON();
+  });
+}
+document.getElementById("resetPart").onclick=()=>{ pose[selected]={x:0,y:0,z:0}; refreshUI(); draw(); updateJSON(); };
+document.getElementById("resetAll").onclick=()=>{ PARTS.forEach((_,i)=>pose[i]={x:0,y:0,z:0}); refreshUI(); draw(); updateJSON(); };
+document.getElementById("copy").onclick=()=>{
+  const text=document.getElementById("json").value;
+  navigator.clipboard.writeText(text).then(()=>{
+    const el=document.getElementById("copyState");
+    el.textContent="copied!"; el.className="hint copied";
+    setTimeout(()=>{ el.textContent=""; }, 1500);
+  });
+};
+function updateJSON(){
+  const parts=PARTS.map((p,i)=>{
+    const q=qNormalize(qFromEuler(pose[i].x,pose[i].y,pose[i].z));
+    const packed=packQuat(q);
+    return {
+      index:i, name:p.name,
+      rotation:{ q:packed.q, x:packed.v[0], y:packed.v[1], z:packed.v[2] },   // packet layout: 2-bit Q + 3x12-bit
+      quaternion:{ w:+q[0].toFixed(4), x:+q[1].toFixed(4), y:+q[2].toFixed(4), z:+q[3].toFixed(4) },
+      eulerDegrees:{ x:Math.round(pose[i].x), y:Math.round(pose[i].y), z:Math.round(pose[i].z) },
+    };
+  });
+  document.getElementById("json").value=JSON.stringify({ format:"subrosa-pose/alpha38", parts }, null, 1);
+}
+refreshUI(); updateJSON(); draw();
+</script>
+</body>
+</html>

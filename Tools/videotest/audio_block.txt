@@ -1,0 +1,79 @@
+    std::mutex readerMutex;
+    std::atomic<bool> run{true};
+    std::atomic<bool> playing{true};
+    std::atomic<bool> flushRequested{false};
+    static WAVEFORMATEX *g_fmt = nullptr;
+    static IAudioClient *g_client = nullptr;
+    std::thread audio([&]()
+    {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        IMMDeviceEnumerator *enumr = nullptr;
+        IMMDevice *dev = nullptr;
+        IAudioRenderClient *render = nullptr;
+        CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), (void**)&enumr);
+        if (enumr) enumr->GetDefaultAudioEndpoint(eRender, eConsole, &dev);
+        if (dev) dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&g_client);
+        UINT32 bufferFrames = 0;
+        if (g_client && SUCCEEDED(g_client->GetMixFormat(&g_fmt)))
+            if (SUCCEEDED(g_client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 10000000, 0, g_fmt, nullptr)))
+            {
+                g_client->GetBufferSize(&bufferFrames);
+                g_client->GetService(__uuidof(IAudioRenderClient), (void**)&render);
+            }
+        printf("wasapi: client=%d render=%d bufferFrames=%u\n", !!g_client, !!render, bufferFrames);
+        bool deviceRunning = false;
+        std::vector<float> queue;
+        int decoded = 0;
+        while (run)
+        {
+            if (flushRequested.exchange(false)) { if (g_client) { g_client->Stop(); g_client->Reset(); } deviceRunning = false; queue.clear(); }
+            if (playing && !deviceRunning && g_client) { g_client->Start(); deviceRunning = true; }
+            else if (!playing && deviceRunning && g_client) { g_client->Stop(); deviceRunning = false; }
+            if (!playing) { Sleep(5); continue; }
+            UINT32 padding = 0;
+            if (g_client && render && SUCCEEDED(g_client->GetCurrentPadding(&padding)))
+            {
+                UINT32 frames = bufferFrames - padding;
+                if (frames > 0)
+                {
+                    BYTE *out = nullptr;
+                    if (SUCCEEDED(render->GetBuffer(frames, &out)))
+                    {
+                        float *fout = (float*)out;
+                        UINT32 writable = (UINT32)(queue.size() / 2 < frames ? queue.size() / 2 : frames);
+                        for (UINT32 i = 0; i < writable * 2; ++i) fout[i] = queue[i];
+                        for (UINT32 i = writable * 2; i < frames * 2; ++i) fout[i] = 0.0f;
+                        render->ReleaseBuffer(frames, 0);
+                        queue.erase(queue.begin(), queue.begin() + writable * 2);
+                    }
+                }
+            }
+            while (queue.size() / 2 < bufferFrames)
+            {
+                DWORD flags = 0; long long ts = 0; IMFSample *s = nullptr;
+                HRESULT r;
+                {
+                    std::lock_guard<std::mutex> lock(readerMutex);
+                    r = reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, &ts, &s);
+                }
+                if (FAILED(r) || (flags & MF_SOURCE_READERF_ENDOFSTREAM) || !s) { Release(s); printf("audio EOS after %d chunks\n", decoded); break; }
+                IMFMediaBuffer *b = nullptr;
+                if (SUCCEEDED(s->ConvertToContiguousBuffer(&b)))
+                {
+                    BYTE *data = nullptr; DWORD len = 0;
+                    if (SUCCEEDED(b->Lock(&data, nullptr, &len)))
+                    {
+                        float *f = (float*)data;
+                        for (DWORD i = 0; i < len / 4; ++i) queue.push_back(f[i]);
+                        b->Unlock();
+                    }
+                    Release(b);
+                }
+                Release(s);
+                ++decoded;
+            }
+            Sleep(5);
+        }
+        if (g_client) g_client->Stop();
+    });
+

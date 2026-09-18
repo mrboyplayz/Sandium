@@ -1,0 +1,516 @@
+#include "LuaManager.hpp"
+
+#include <memory>
+#include <sol/sol.hpp>
+#include <sstream>
+#include <string>
+#include <stdexcept>
+#include <subhook.h>
+#include <utility>
+
+#include "Addon.hpp"
+#include "Addresses.hpp"
+#include "api/Logging.hpp"
+#include "api/Image.hpp"
+#include "api/Time.hpp"
+#include "api/Video.hpp"
+#include "ServerMedia.hpp"
+#include "hooks/CreateItem.hpp"
+#include "hooks/CreateVehicle.hpp"
+#include "structs/Item.hpp"
+#include "structs/ItemType.hpp"
+#include "structs/Vehicle.hpp"
+#include "structs/VehicleType.hpp"
+#include "TypeManager.hpp"
+
+// https://github.com/moonjit/moonjit/blob/master/doc/c_api.md#luajit_setmodel-idx-luajit_mode_wrapcfuncflag
+static int wrapExceptions(lua_State* L, lua_CFunction f) 
+{
+	try
+    {
+		return f(L);
+	} catch (const char* s)
+    {
+		lua_pushstring(L, s);
+	} catch (const std::exception& e)
+    {
+		lua_pushstring(L, e.what());
+	} catch (...)
+    {
+		lua_pushliteral(L, "caught (...)");
+	}
+	return lua_error(L);
+}
+
+LuaManager::LuaManager()
+{
+
+}
+
+void LuaManager::Initialize()
+{
+    this->_L = std::make_unique<sol::state>();
+
+    lua_pushlightuserdata(*this->_L, (void*)wrapExceptions);
+	luaJIT_setmode(*this->_L, -1, LUAJIT_MODE_WRAPCFUNC | LUAJIT_MODE_ON);
+	lua_pop(*this->_L, 1);
+
+    this->_L->open_libraries(sol::lib::base);
+	//this->_L->open_libraries(sol::lib::package);
+	//this->_L->open_libraries(sol::lib::coroutine);
+	this->_L->open_libraries(sol::lib::string);
+	this->_L->open_libraries(sol::lib::math);
+	this->_L->open_libraries(sol::lib::table);
+	this->_L->open_libraries(sol::lib::bit32);
+
+	(*this->_L)["print"] = [&](const sol::this_state &state, const sol::variadic_args &args)
+	{
+		std::stringstream stream;
+		for (std::string str : args)
+			stream << str << '\t';
+
+		std::string text = stream.str();
+		text.pop_back(); // Pop last tab
+		this->GetCurrentAddon()->GetLogger()->LogText(text);
+	};
+	(*this->_L)["warn"] = [&](const sol::this_state &state, const sol::variadic_args &args)
+	{
+		std::stringstream stream;
+		for (std::string str : args)
+			stream << str << '\t';
+
+		std::string text = stream.str();
+		text.pop_back(); // Pop last tab
+		this->GetCurrentAddon()->GetLogger()->LogText(std::string("<yellow>") + text);
+	};
+
+	this->_L->new_usertype<LuaHook>(
+		"Hook",
+
+		sol::call_constructor, [&](const std::string &hookName, const sol::function &hookFunction, const sol::variadic_args &flags)
+		{
+			std::shared_ptr<LuaHook> hook = std::make_shared<LuaHook>();
+
+			hook->active = true;
+			hook->addon = this->GetCurrentAddon();
+			hook->name = hookName;
+			hook->function = (sol::protected_function)hookFunction;
+			if (flags.size() > 0)
+			{
+				for (std::string flag : flags)
+					hook->flags.push_back(flag);
+			}
+			else
+				hook->flags = std::vector<std::string>{ "pre" };
+
+			this->_hooks.push_back(hook);
+
+			return hook;
+		},
+
+		"Remove", &LuaHook::Remove
+	);
+
+	this->_L->new_usertype<Addon>(
+		"Addon",
+		sol::no_constructor,
+
+		"isLoaded", sol::property(&Addon::IsLoaded),
+
+		"id", sol::property(&Addon::ID),
+
+		"name", sol::property(&Addon::GetName),
+		"description", sol::property(&Addon::GetDescription),
+		"logDecoration", sol::property(&Addon::GetLogDecoration),
+
+		"GetAll", [&](const sol::this_state &state)
+		{
+			sol::table table = sol::table::create(state.L);
+			std::size_t sz = 1;
+			for (const std::unique_ptr<Addon> &addon : GetAddons())
+			{
+				table[sz] = addon.get();
+				sz++;
+			}
+			return table;
+		},
+		"Current", sol::property([&]()
+		{
+			return this->GetCurrentAddon();
+		})
+	);
+
+	this->_L->new_usertype<api::Image>(
+		"Image",
+		sol::no_constructor,
+		"Load", &api::Image::Load,
+		"Draw", sol::overload(
+			[](api::Image &image, float x, float y) { image.Draw(x, y, static_cast<float>(image.Width()), static_cast<float>(image.Height())); },
+			[](api::Image &image, float x, float y, float width, float height) { image.Draw(x, y, width, height); },
+			[](api::Image &image, float x, float y, float width, float height, float alpha) { image.Draw(x, y, width, height, 1, 1, 1, alpha); },
+			[](api::Image &image, float x, float y, float width, float height, float red, float green, float blue, float alpha) { image.Draw(x, y, width, height, red, green, blue, alpha); }
+		),
+		"Delete", &api::Image::Delete,
+		"width", sol::property(&api::Image::Width),
+		"height", sol::property(&api::Image::Height),
+		"sizeX", sol::property(&api::Image::Width),
+		"sizeY", sol::property(&api::Image::Height),
+		"layer", sol::property(&api::Image::Layer, &api::Image::SetLayer),
+		"rotation", sol::property(&api::Image::Rotation, &api::Image::SetRotation),
+		"isValid", sol::property(&api::Image::IsValid)
+	);
+
+	this->_L->new_usertype<api::Video>(
+		"Video",
+		sol::no_constructor,
+		"Load", &api::Video::Load,
+		"Play", &api::Video::Play,
+		"Pause", &api::Video::Pause,
+		"Stop", &api::Video::Stop,
+		"Draw", sol::overload(
+			[](api::Video &video, float x, float y) { video.Draw(x, y, static_cast<float>(video.Width()), static_cast<float>(video.Height())); },
+			[](api::Video &video, float x, float y, float width, float height) { video.Draw(x, y, width, height); },
+			[](api::Video &video, float x, float y, float width, float height, float alpha) { video.Draw(x, y, width, height, 1, 1, 1, alpha); },
+			[](api::Video &video, float x, float y, float width, float height, float red, float green, float blue, float alpha) { video.Draw(x, y, width, height, red, green, blue, alpha); }
+		),
+		"Delete", &api::Video::Delete,
+		"width", sol::property(&api::Video::Width),
+		"height", sol::property(&api::Video::Height),
+		"sizeX", sol::property(&api::Video::Width),
+		"sizeY", sol::property(&api::Video::Height),
+		"layer", sol::property(&api::Video::Layer, &api::Video::SetLayer),
+		"rotation", sol::property(&api::Video::Rotation, &api::Video::SetRotation),
+		"isPlaying", sol::property(&api::Video::IsPlaying),
+		"duration", sol::property(&api::Video::Duration),
+		"position", sol::property(&api::Video::Position, &api::Video::SetPosition),
+		"isValid", sol::property(&api::Video::IsValid)
+	);
+
+	this->_L->new_usertype<api::Time>(
+		"Time",
+		sol::no_constructor,
+		"getSunAngle", &api::Time::GetSunAngle,
+		"setSunAngle", &api::Time::SetSunAngle,
+		"isValid", &api::Time::IsValid,
+		"dumpDebug", &api::Time::DumpDebug,
+		"getSunTime", &api::Time::GetSunTime,
+		"setSunTime", &api::Time::SetSunTime
+	);
+	(*this->_L)["Time"] = api::Time{};
+
+	this->_L->new_usertype<structs::Bone>(
+		"Bone",
+		sol::no_constructor,
+		"rigidBodyID", &structs::Bone::rigidBodyID,
+		"position", &structs::Bone::position,
+		"velocity", &structs::Bone::velocity
+	);
+
+	this->_L->new_usertype<structs::Human>(
+		"Human",
+		sol::no_constructor,
+		"isActive", &structs::Human::isActive,
+		"playerID", &structs::Human::playerID,
+		"position", &structs::Human::position,
+		"viewYaw", &structs::Human::viewYaw,
+		"viewPitch", &structs::Human::viewPitch,
+		"inputFlags", &structs::Human::inputFlags,
+		"health", &structs::Human::health,
+		"headHealth", &structs::Human::headHealth,
+		"chestHealth", &structs::Human::torsoHealth,
+		"leftArmHealth", &structs::Human::leftArmHealth,
+		"rightArmHealth", &structs::Human::rightArmHealth,
+		"leftLegHealth", &structs::Human::leftLegHealth,
+		"rightLegHealth", &structs::Human::rightLegHealth,
+		"getBone", [](structs::Human &human, int index) -> structs::Bone &
+		{
+			if (index < 0 || index > 15)
+				index = 0;
+			return human.bones[index];
+		}
+	);
+
+	sol::table gameTable = this->_L->create_named_table("Game");
+	gameTable["isInGame"] = []() { return addresses::IsInGame.ptr && addresses::IsInGame.ptr->b1; };
+
+	sol::table mediaTable = this->_L->create_named_table("ServerMedia");
+	mediaTable["Sync"] = &servermedia::Sync;
+	mediaTable["Ready"] = &servermedia::Ready;
+	mediaTable["Path"] = &servermedia::Path;
+	servermedia::Sync(); // kick off the download as soon as Lua is up
+
+	sol::table humansTable = this->_L->create_named_table("Humans");
+	humansTable["GetAll"] = [](const sol::this_state &state)
+	{
+		sol::table table = sol::table::create(state.L);
+		std::size_t count = 1;
+		for (std::size_t humanCount = 0; humanCount < structs::Human::VanillaCount; humanCount++)
+			if (addresses::Humans[humanCount].isActive.b1)
+				table[count++] = &addresses::Humans[humanCount];
+		return table;
+	};
+	humansTable["GetLocal"] = []() -> structs::Human *
+	{
+		for (std::size_t humanCount = 0; humanCount < structs::Human::VanillaCount; humanCount++)
+			if (addresses::Humans[humanCount].isActive.b1)
+				return &addresses::Humans[humanCount];
+		return nullptr;
+	};
+	
+	this->DefineGameTypes();
+}
+void LuaManager::Deinitialize()
+{
+	this->_hooks.clear();
+
+    this->_L.reset();
+}
+void LuaManager::DefineGameTypes()
+{
+	this->_L->new_usertype<structs::CInteger>(
+		"Integer",
+		sol::no_constructor,
+
+		"value", &structs::CInteger::i,
+
+		"__tostring", &structs::CInteger::operator std::string
+	);
+
+	this->_L->new_usertype<structs::CBoolean>(
+		"Boolean",
+		sol::no_constructor,
+		
+		"value", &structs::CBoolean::b1,
+
+		"__tostring", &structs::CBoolean::operator std::string
+	);
+
+	this->_L->new_usertype<structs::CVector3>(
+		"Vector3",
+
+		"x", &structs::CVector3::x,
+		"y", &structs::CVector3::y,
+		"z", &structs::CVector3::z,
+
+		sol::call_constructor, []()
+		{
+			return structs::CVector3();
+		},
+		sol::call_constructor, [](float x, float y, float z)
+		{
+			return structs::CVector3(x, y, z);
+		},
+
+		"Set", &structs::CVector3::operator =,
+
+		"length", sol::property(&structs::CVector3::Length),
+		"Dot", &structs::CVector3::Dot,
+		"Cross", &structs::CVector3::Cross,
+
+		"__tostring", &structs::CVector3::operator std::string,
+
+		"Zero", sol::property([]()
+		{
+			return (structs::CVector3)structs::CVector3(0.0f, 0.0f, 0.0f);
+		}),
+		"One", sol::property([]()
+		{
+			return (structs::CVector3)structs::CVector3(1.0f, 1.0f, 1.0f);
+		})
+	);
+
+	this->_L->new_usertype<structs::COrientation>(
+		"Orientation",
+
+		"right", &structs::COrientation::right,
+		"up",    &structs::COrientation::up,
+		"back",  &structs::COrientation::back,
+
+		sol::call_constructor, []()
+		{
+			return structs::COrientation();
+		},
+
+		"Set", &structs::COrientation::operator =,
+
+		"__tostring", &structs::COrientation::operator std::string,
+
+		"Identity", sol::property([]()
+		{
+			return structs::COrientation();
+		})
+	);
+
+	this->_L->new_usertype<structs::ItemType>(
+		"ItemType",
+		sol::no_constructor,
+
+		"name", sol::property(&structs::ItemType::GetName, &structs::ItemType::SetName),
+
+		"index", sol::property(&structs::ItemType::GetIndex),
+		"typeID", sol::property(&structs::ItemType::GetTypeID),
+
+		"GetAll", [](const sol::this_state &state)
+		{
+			sol::table table = sol::table::create(state.L);
+			for (std::size_t itemTypeCount = 0; itemTypeCount < structs::ItemType::VanillaCount; itemTypeCount++)
+				table[itemTypeCount + 1] = &addresses::ItemTypes[itemTypeCount];
+			return table;
+		},
+		"GetByID", [](const std::string &typeID)
+		{
+			std::pair<std::string, std::string> decomposed = DecomposeTypeID(typeID);
+			return &addresses::ItemTypes[GetItemTypeManager()->GetID(decomposed.first, decomposed.second)];
+		}
+	);
+
+	this->_L->new_usertype<structs::Item>(
+		"Item",
+		sol::no_constructor,
+
+		"isActive", &structs::Item::isActive,
+		"type", sol::property(&structs::Item::GetType),
+
+		"position", &structs::Item::position,
+		"velocity", &structs::Item::velocity,
+		"orientation", &structs::Item::orientation,
+
+		"Create", sol::overload(
+			[](const structs::ItemType &itemType, const structs::CVector3 &position, const structs::COrientation &orientation)
+			{
+				structs::CVector3 realPosition = position;
+				structs::CVector3 realVelocity = structs::CVector3();
+				structs::COrientation realOrientation = orientation;
+
+				subhook::ScopedHookRemove scopedRemove(createItemHook);
+				int itemID = addresses::CreateItemFunc(itemType.customData.index, &realPosition, &realVelocity, &realOrientation);
+				if (itemID < 0)
+					throw std::runtime_error("Could not create item");
+				return &addresses::Items[itemID];
+			},
+			[](const structs::ItemType &itemType, const structs::CVector3 &position, const structs::COrientation &orientation, const structs::CVector3 &velocity)
+			{
+				structs::CVector3 realPosition = position;
+				structs::CVector3 realVelocity = velocity;
+				structs::COrientation realOrientation = orientation;
+
+				subhook::ScopedHookRemove scopedRemove(createItemHook);
+				int itemID = addresses::CreateItemFunc(itemType.customData.index, &realPosition, &realVelocity, &realOrientation);
+				if (itemID < 0)
+					throw std::runtime_error("Could not create item");
+				return &addresses::Items[itemID];
+			})
+	);
+
+	this->_L->new_usertype<structs::VehicleType>(
+		"VehicleType",
+		sol::no_constructor,
+
+		"name", sol::property(&structs::VehicleType::GetName, &structs::VehicleType::SetName),
+		"price", &structs::VehicleType::price,
+		"mass", &structs::VehicleType::mass,
+
+		"index", sol::property(&structs::VehicleType::GetIndex),
+		"typeID", sol::property(&structs::VehicleType::GetTypeID),
+
+		"GetAll", [](const sol::this_state &state)
+		{
+			sol::table table = sol::table::create(state.L);
+			for (std::size_t vehicleTypeCount = 0; vehicleTypeCount < structs::VehicleType::VanillaCount; vehicleTypeCount++)
+				table[vehicleTypeCount + 1] = &addresses::VehicleTypes[vehicleTypeCount];
+			return table;
+		},
+		"GetByID", [](const std::string &typeID)
+		{
+			std::pair<std::string, std::string> decomposed = DecomposeTypeID(typeID);
+			return &addresses::VehicleTypes[GetVehicleTypeManager()->GetID(decomposed.first, decomposed.second)];
+		}
+	);
+
+	this->_L->new_usertype<structs::Vehicle>(
+		"Vehicle",
+		sol::no_constructor,
+
+		"isActive", &structs::Vehicle::isActive,
+		"type", sol::property(&structs::Vehicle::GetType),
+
+		"position", &structs::Vehicle::position,
+		"velocity", &structs::Vehicle::velocity,
+		"orientation", &structs::Vehicle::orientation,
+
+		"Create", sol::overload(
+			[](const structs::VehicleType &itemType, int colorID, const structs::CVector3 &position, const structs::COrientation &orientation)
+			{
+				structs::CVector3 realPosition = position;
+				structs::CVector3 realVelocity = structs::CVector3();
+				structs::COrientation realOrientation = orientation;
+
+				subhook::ScopedHookRemove scopedRemove(createVehicleHook);
+				int vehicleID = addresses::CreateVehicleFunc(itemType.customData.index, &realPosition, &realVelocity, &realOrientation, colorID);
+				if (vehicleID < 0)
+					throw std::runtime_error("Could not create vehicle");
+				return &addresses::Vehicles[vehicleID];
+			},
+			[](const structs::VehicleType &itemType, int colorID, const structs::CVector3 &position, const structs::COrientation &orientation, const structs::CVector3 &velocity)
+			{
+				structs::CVector3 realPosition = position;
+				structs::CVector3 realVelocity = velocity;
+				structs::COrientation realOrientation = orientation;
+
+				subhook::ScopedHookRemove scopedRemove(createVehicleHook);
+				int vehicleID = addresses::CreateVehicleFunc(itemType.customData.index, &realPosition, &realVelocity, &realOrientation, colorID);
+				if (vehicleID < 0)
+					throw std::runtime_error("Could not create vehicle");
+				return &addresses::Vehicles[vehicleID];
+			})
+	);
+}
+
+Addon *LuaManager::GetCurrentAddon()
+{
+	lua_State *L = this->_L->lua_state();
+	lua_rawgeti(L, LUA_REGISTRYINDEX, LUAMANAGER_LUAADDONINDEX);
+	void *ptr = lua_touserdata(L, -1);
+	lua_pop(L, 1);
+	return (Addon *)ptr;
+}
+void LuaManager::SetCurrentAddon(Addon *addon)
+{
+	lua_State *L = this->_L->lua_state();
+	lua_pushlightuserdata(L, addon);
+	lua_rawseti(L, LUA_REGISTRYINDEX, LUAMANAGER_LUAADDONINDEX);
+}
+
+const std::vector<std::shared_ptr<LuaHook>> &LuaManager::GetHooks() const
+{
+	return this->_hooks;
+}
+
+void LuaManager::RemoveAddonHooks(Addon *addon)
+{
+	for (const auto &hook : this->_hooks)
+		if (hook->addon == addon && hook->active)
+			hook->Remove();
+}
+void LuaManager::CheckHooks()
+{
+	for (auto it = this->_hooks.begin(); it != this->_hooks.end(); ++it)
+	{
+		if (!(*it)->active)
+		{
+			this->_hooks.erase(it);
+			break;
+		}
+	}
+}
+
+sol::state *LuaManager::L() const
+{
+    return this->_L.get();
+}
+
+LuaManager *GetMainLuaManager()
+{
+    static LuaManager s;
+    return &s;
+}

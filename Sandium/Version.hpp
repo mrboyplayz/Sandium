@@ -1,0 +1,8 @@
+#pragma once
+
+#include <string>
+
+#define SANDIUM_VERSION "2023.6.4-0"
+#define SANDIUM_GAME_VERSION_NUMBER 38
+#define SANDIUM_GAME_VERSION_PATCH 'f'
+#define SANDIUM_GAME_VERSION_PATCH_DEDICATED 'e'

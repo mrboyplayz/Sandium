@@ -1,7 +1,7 @@
-# Suitium and SuitiumLauncher
+# Sandium and SandiumLauncher
 
 This project contains multiple modules... \
-Please check "Suitium" and "SuitiumLauncher" folders.
+Please check "Sandium" and "SandiumLauncher" folders.
 
 ## Compiling & Testing (For Windows)
 
@@ -14,12 +14,12 @@ In PowerShell, run the following command ONCE to setup the environment:
 ```
 
 If moonjit was compiled successfully, copy lua51.dll compiled by CMake to your game folder.
-Then run the following command to compile and test Suitium:
+Then run the following command to compile and test Sandium:
 
 ```bat
-./Tools/cmake_win32.bat ; ./Tools/test_win32.bat "C:\Program Files (x86)\Steam\steamapps\common\Sub Rosa\subrosa.exe" "PATH TO SUITIUM DLL HERE"
+./Tools/cmake_win32.bat ; ./Tools/test_win32.bat "C:\Program Files (x86)\Steam\steamapps\common\Sub Rosa\subrosa.exe" "PATH TO SANDIUM DLL HERE"
 ```
 
-Replace "PATH TO SUITIUM DLL HERE" with the path to the .dll compiled by CMake.
+Replace "PATH TO SANDIUM DLL HERE" with the path to the .dll compiled by CMake.
 
 Happy modding!

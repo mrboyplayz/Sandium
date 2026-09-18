@@ -1,0 +1,7 @@
+{
+  "id": "boxing",
+  "name": "Suitium Boxing",
+  "description": "Client-side punch combat: LMB punches the nearest human in reach. Damage, limb hits and knockback. Singleplayer/Practice.",
+  "requires": [],
+  "conflicts": []
+}

@@ -1,0 +1,8 @@
+{
+    "conflicts": [],
+    "description": "Speeds up the day/night cycle: a full day passes in ~90 seconds.",
+    "disabled": true,
+    "id": "fast_day",
+    "name": "Fast Day Example",
+    "requires": []
+}

@@ -1,0 +1,7 @@
+{
+  "id": "server_video",
+  "name": "Server Video",
+  "description": "Plays the video hosted by the server (downloaded to sandium/cache automatically). Change the video on the server, not in the addon.",
+  "requires": [],
+  "conflicts": []
+}
