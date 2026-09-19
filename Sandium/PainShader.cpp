@@ -53,7 +53,8 @@ namespace painshader
         float immunity = 0.0f;
         float blackFade = 0.0f;
         bool volumeDucked = false;
-        float exertion = 0.0f;
+        int lastBrokenCount = 0;
+        bool brokenCountValid = false;
         bool exertionValid = false;
         float lastX = 0.0f, lastY = 0.0f, lastZ = 0.0f;
 
@@ -138,7 +139,6 @@ namespace painshader
             hadHuman = false;
             acute = 0.0f;
             lastPain = 0.0f;
-            exertion = 0.0f;
             sustainTimer = 0.0f;
             unconscious = false;
             human->movementStateID = 0;
@@ -166,7 +166,11 @@ namespace painshader
                     dropped += limbDrop;
             }
             if (dropped > 0)
+            {
                 acute = std::min(0.55f, acute + dropped * 0.02f);
+                // any damage feeds the pain reservoir
+                lastPain = std::min(lastPain + dropped * 0.035f, 10.0f);
+            }
         }
         lastHealth = human->health;
         for (int i = 0; i < 6; ++i)
@@ -182,31 +186,54 @@ namespace painshader
         // damage adds up to +3, a fresh hit adds its acute burst.
         const float broken = static_cast<float>(brokenbones::BrokenCount());
 
-        // moving on broken limbs keeps hurting: pain creeps up while walking
+        // movement tracking for limb aggravation
         int brokenLegs = 0, brokenArms = 0;
         brokenbones::BrokenLimbs(brokenLegs, brokenArms);
         const float dxp = human->position.x - lastX;
         const float dyp = human->position.y - lastY;
         const float dzp = human->position.z - lastZ;
         const float moved = sqrtf(dxp * dxp + dyp * dyp + dzp * dzp);
-        if (exertionValid && moved > 0.02f && moved < 2.0f)
-        {
-            if (brokenLegs > 0)
-                exertion += moved * 0.55f * (float)brokenLegs;
-            if (brokenArms > 0)
-                exertion += moved * 0.20f * (float)brokenArms;
-        }
         lastX = human->position.x;
         lastY = human->position.y;
         lastZ = human->position.z;
-        exertionValid = true;
-        exertion = std::min(exertion * 0.985f, 3.0f);
 
-        float pain = broken * 1.67f;
-        pain += (1.0f - std::clamp(human->health, 0, 100) / 100.0f) * 3.0f;
-        pain += acute;
-        pain += exertion;
-        lastPain = std::clamp(pain, 0.0f, 10.0f);
+        // new breaks add a chunk of pain at the moment they happen
+        const int brokenNow = brokenLegs + brokenArms + (human->headHealth <= 0 ? 1 : 0) +
+                              (human->torsoHealth <= 0 ? 1 : 0);
+        if (brokenCountValid && brokenNow > lastBrokenCount)
+            lastPain = std::min(lastPain + 2.0f * (brokenNow - lastBrokenCount), 10.0f);
+        lastBrokenCount = brokenNow;
+        brokenCountValid = true;
+
+        // aggravation: doing things while broken keeps hurting, and using a
+        // weapon/item with a broken arm or trying to get up hurts badly
+        const unsigned flags = human->inputFlags;
+        const bool usingItem = (flags & 1u) != 0u; // left mouse: fire/swing
+        const bool tryingUp = human->movementStateID == 5 &&
+                              (((flags & 4u) != 0u) || human->forwardInput > 0.1f);
+        bool hasItem = false;
+        for (const structs::InventorySlot &slot : human->inventorySlots)
+            if (slot.firstPlaceItemID >= 0 || slot.secondPlaceItemID >= 0)
+                hasItem = true;
+
+        float aggravation = 0.0f;
+        if (moved > 0.02f && moved < 2.0f)
+        {
+            if (brokenLegs > 0)
+                aggravation += 1.1f * brokenLegs;
+            if (brokenArms > 0)
+                aggravation += 0.35f * brokenArms;
+        }
+        if (usingItem && brokenArms > 0 && hasItem)
+            aggravation += 3.5f;
+        if (tryingUp && (brokenLegs + brokenArms) > 0)
+            aggravation += 2.5f;
+
+        // doing nothing: pain slowly but surely drains back to zero
+        if (aggravation > 0.0f)
+            lastPain = std::min(lastPain + aggravation / 60.0f, 10.0f);
+        else
+            lastPain = std::max(lastPain - 0.15f / 60.0f, 0.0f);
 
         if (immunity > 0.0f)
             immunity -= 1.0f / 60.0f;
