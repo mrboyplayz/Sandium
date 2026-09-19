@@ -64,19 +64,23 @@ namespace grainshader
                              "uniform float uAmount;\n"
                              "uniform float uDark;   // 1 = dark pass, 0 = light pass\n"
                              "out vec4 color;\n"
-                             "float rand(vec2 co){ return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453); }\n"
+                             "float hash(vec2 p){\n"
+                             "  p = fract(p * vec2(123.34, 456.21));\n"
+                             "  p += dot(p, p + 45.32);\n"
+                             "  return fract(p.x * p.y);\n"
+                             "}\n"
                              "void main(){\n"
-                             "  float j = rand(vec2(uTime.x * 2.72154951, uTime.y)) * 13.0;\n"
-                             "  vec2 coord = vUv * 1024.0 + j;\n"
-                             "  float n = rand(coord);\n"
+                             "  float j = hash(vec2(uTime.x * 2.72154951, uTime.y)) * 13.0;\n"
+                             "  vec2 coord = floor(vUv * 1024.0) + j;\n"
+                             "  float n = hash(coord);\n"
                              "  vec2 d = vUv - 0.5;\n"
                              "  float r2 = dot(d, d);\n"
-                             "  float weight = 0.4 + 1.6 * smoothstep(0.1, 0.7, sqrt(r2) * 2.0);\n"
+                             "  float weight = mix(0.6, 1.6, smoothstep(0.2, 0.75, sqrt(r2) * 2.0));\n"
                              "  float g = (n - 0.5) * uAmount * weight;\n"
                              "  if (uDark > 0.5)\n"
-                             "    color = vec4(1.0) - vec4(max(-g, 0.0));\n"
+                             "    color = vec4(1.0) - vec4(max(-g, 0.0) * 0.8);\n"
                              "  else\n"
-                             "    color = vec4(max(g, 0.0));\n"
+                             "    color = vec4(max(g, 0.0) * 0.8);\n"
                              "}\n";
 
             GLuint v = Compile(GL_VERTEX_SHADER, vs);
@@ -114,9 +118,11 @@ namespace grainshader
         if (!EnsureProgram())
             return;
 
-        const float pain = painshader::Intensity();
-        // visible cinematic base; pain cranks it up hard
-        const float amount = 0.16f + pain * 0.65f;
+        // pain 0 = NO grain at all; 2 = a little; 10 = heavy
+        const float amount = painshader::Intensity() * 0.55f;
+        if (amount < 0.03f)
+            return;
+
         const float seconds = std::chrono::duration<float>(
                                   std::chrono::steady_clock::now() - started).count();
 

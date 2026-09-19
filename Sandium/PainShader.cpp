@@ -1,13 +1,21 @@
 #include "PainShader.hpp"
 
 #include "Addresses.hpp"
+#include "BrokenBones.hpp"
 #include "structs/Human.hpp"
 #include "api/Image.hpp"
+#include "api/Text.hpp"
+
+#if _WIN32
+#undef DrawText
+#endif
 
 #include <glad/glad.h>
 
 #include <cmath>
 #include <chrono>
+#include <cstdio>
+#include <string>
 
 // Pain overlay. The vignette is a procedurally generated radial alpha
 // gradient (white, tinted red at draw time through the image layer's color
@@ -29,7 +37,7 @@ namespace painshader
         bool limbsValid = false;
         float acute = 0.0f;
         bool hadHuman = false;
-        float lastIntensity = 0.0f;
+        float lastPain = 0.0f; // 0..10
 
         const auto started = std::chrono::steady_clock::now();
 
@@ -75,6 +83,11 @@ namespace painshader
         }
     }
 
+    float PainLevel()
+    {
+        return lastPain;
+    }
+
     void Update()
     {
 #if _WIN32
@@ -83,6 +96,7 @@ namespace painshader
         {
             hadHuman = false;
             acute = 0.0f;
+            lastPain = 0.0f;
             return;
         }
 
@@ -112,6 +126,14 @@ namespace painshader
         acute *= 0.90f;
         if (acute < 0.01f)
             acute = 0.0f;
+
+        // Pain scale 0..10: broken bones dominate (+1.67 each), heavy total
+        // damage adds up to +3, a fresh hit adds its acute burst.
+        const float broken = static_cast<float>(brokenbones::BrokenCount());
+        float pain = broken * 1.67f;
+        pain += (1.0f - std::clamp(human->health, 0, 100) / 100.0f) * 3.0f;
+        pain += acute;
+        lastPain = std::clamp(pain, 0.0f, 10.0f);
 #endif
     }
 
@@ -135,30 +157,29 @@ namespace painshader
                 return;
         }
 
-        structs::Human *human = LocalHuman();
-        float chronic = 0.0f;
-        if (human)
-        {
-            const float health = std::clamp(human->health, 0, 100);
-            chronic = (1.0f - health / 100.0f) * 0.5f;
-        }
-
-        const float seconds = std::chrono::duration<float>(
-                                  std::chrono::steady_clock::now() - started).count();
-        const float pulse = chronic > 0.15f ? std::sin(seconds * 2.6f) * 0.06f * chronic : 0.0f;
-
-        float intensity = std::clamp(chronic + acute + pulse, 0.0f, 0.85f);
+        // red intensity from the pain scale: 0 = none, 2 = slight, 10 = max
+        const float level = lastPain;
+        const float intensity = std::pow(level / 10.0f, 1.3f) * 0.85f;
         if (intensity < 0.02f)
             return;
 
+        const float seconds = std::chrono::duration<float>(
+                                  std::chrono::steady_clock::now() - started).count();
+        const float pulse = level > 4.0f ? std::sin(seconds * 2.6f) * 0.08f * (level / 10.0f) : 0.0f;
+
         api::QueueDraw(texture, 0.0f, 0.0f, 1024.0f, 768.0f,
-                       1.0f, 0.12f, 0.12f, intensity, 1, 0.0f);
-        lastIntensity = std::clamp(chronic + acute, 0.0f, 1.0f);
+                       1.0f, 0.10f, 0.10f, std::clamp(intensity + pulse, 0.0f, 0.9f), 1, 0.0f);
+
+        // the pain stat itself (user-visible in practice mode)
+        char stat[64];
+        std::snprintf(stat, sizeof(stat), "pain: %d", static_cast<int>(level + 0.5f));
+        api::QueueText(std::string(stat), 90.0f, 740.0f, 15.0f,
+                       glm::vec4(1.0f, 0.3f, 0.25f, 1.0f), api::TextAlignment::Left, true);
 #endif
     }
 
     float Intensity()
     {
-        return lastIntensity;
+        return std::clamp(lastPain / 10.0f, 0.0f, 1.0f);
     }
 }

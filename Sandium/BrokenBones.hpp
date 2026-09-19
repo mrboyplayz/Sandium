@@ -8,4 +8,7 @@ namespace brokenbones
     // damage) and multiplayer (server breaks confirm through the same sync).
     // Call every frame from the HUD hook. Windows only.
     void Update();
+
+    // Number of broken limbs on the local human (0..6).
+    int BrokenCount();
 }

@@ -346,6 +346,21 @@ namespace brokenbones
 
     }
 
+    int BrokenCount()
+    {
+        for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+        {
+            if (!addresses::Humans[h].isActive.b1)
+                continue;
+            int count = 0;
+            for (int i = 0; i < 6; ++i)
+                if (brokenLimbs[h][i])
+                    ++count;
+            return count;
+        }
+        return 0;
+    }
+
     void Update()
     {
         StartEvents();
