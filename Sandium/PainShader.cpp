@@ -57,6 +57,7 @@ namespace painshader
         bool exertionValid = false;
         float lastX = 0.0f, lastY = 0.0f, lastZ = 0.0f;
 
+        structs::Human *LocalHuman();
         void SetSessionVolume(float volume)
         {
             static void *simpleAudioVolume = nullptr;
