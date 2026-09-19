@@ -84,10 +84,11 @@ namespace painshader
                 reinterpret_cast<ISimpleAudioVolume *>(simpleAudioVolume)->SetMasterVolume(volume, nullptr);
         }
 
-        void GoUnconscious()
+        void GoUnconscious(float severity) // 0..1: how brutal the knockout is
         {
             unconscious = true;
-            unconTimer = 4.0f + (std::rand() % 30) / 10.0f;
+            // deeper pain / harder slams keep you out longer, plus jitter
+            unconTimer = 2.5f + severity * 5.0f + (std::rand() % 20) / 10.0f - 1.0f;
             blackFade = 0.0f;
             SetSessionVolume(0.0f);
             volumeDucked = true;
@@ -126,11 +127,22 @@ namespace painshader
     {
 #if _WIN32
         structs::Human *human = LocalHuman();
-        if (!human)
+        // dead (gone or health gone): every pain effect shuts off -- no
+        // vignette, no grain, no shake, no black screen, audio back
+        if (!human || human->health <= 0)
         {
             hadHuman = false;
             acute = 0.0f;
             lastPain = 0.0f;
+            exertion = 0.0f;
+            sustainTimer = 0.0f;
+            unconscious = false;
+            if (volumeDucked)
+            {
+                SetSessionVolume(1.0f);
+                volumeDucked = false;
+            }
+            blackFade = std::max(blackFade - 1.0f / 60.0f / 0.2f, 0.0f);
             return;
         }
 
@@ -216,13 +228,13 @@ namespace painshader
             {
                 sustainTimer += 1.0f / 60.0f;
                 if (sustainTimer >= 1.2f)
-                    GoUnconscious();
+                    GoUnconscious(std::min(lastPain / 10.0f, 1.0f));
             }
             else
                 sustainTimer = 0.0f;
 
             if (acute >= 0.5f)
-                GoUnconscious();
+                GoUnconscious(std::min(acute * 1.8f, 1.0f));
         }
 
         blackFade = unconscious ? blackFade
