@@ -7,6 +7,7 @@
 #include "structs/Human.hpp"
 
 #include <chrono>
+#include <cstdio>
 
 #if _WIN32
 #include <Windows.h>
@@ -29,11 +30,18 @@ namespace brokenbones
         struct LimbRef
         {
             int *current;
-            int last;
+            int last;          // reference at the start of the damage window
+            int windowMs;      // ms since the window started
         };
 
+        // Damage often arrives as several small hits across physics ticks
+        // (ragdoll settling on a landing), so the break triggers on the total
+        // drop within a short window instead of a single frame.
         LimbRef limbRefs[structs::Human::VanillaCount][6] = {};
         bool initialized[structs::Human::VanillaCount] = {};
+        constexpr int WINDOW_MS = 400;
+
+        unsigned int diagFrames = 0;
 
         std::shared_ptr<api::Sound> crackSound;
         bool soundFailed = false;
@@ -71,6 +79,25 @@ namespace brokenbones
 
     void Update()
     {
+        // periodic ground-truth dump of the local human's limb HP
+        if (++diagFrames % 120 == 0)
+        {
+            for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+            {
+                if (!addresses::Humans[h].isActive.b1)
+                    continue;
+                if (std::FILE *f = std::fopen("sandium_bones.txt", "w"))
+                {
+                    structs::Human &hm = addresses::Humans[h];
+                    std::fprintf(f, "head=%d torso=%d lArm=%d rArm=%d lLeg=%d rLeg=%d total=%d\n",
+                                 hm.headHealth, hm.torsoHealth, hm.leftArmHealth,
+                                 hm.rightArmHealth, hm.leftLegHealth, hm.rightLegHealth,
+                                 hm.health);
+                    std::fclose(f);
+                }
+                break; // first active human (local in practice)
+            }
+        }
         for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
         {
             structs::Human &human = addresses::Humans[h];
@@ -79,39 +106,51 @@ namespace brokenbones
                 initialized[h] = false;
                 continue;
             }
+            int *limbs[6] = {&human.headHealth, &human.torsoHealth, &human.leftArmHealth,
+                             &human.rightArmHealth, &human.leftLegHealth, &human.rightLegHealth};
+
             if (!initialized[h])
             {
-                limbRefs[h][0] = {&human.headHealth, human.headHealth};
-                limbRefs[h][1] = {&human.torsoHealth, human.torsoHealth};
-                limbRefs[h][2] = {&human.leftArmHealth, human.leftArmHealth};
-                limbRefs[h][3] = {&human.rightArmHealth, human.rightArmHealth};
-                limbRefs[h][4] = {&human.leftLegHealth, human.leftLegHealth};
-                limbRefs[h][5] = {&human.rightLegHealth, human.rightLegHealth};
+                for (int i = 0; i < 6; ++i)
+                    limbRefs[h][i] = {limbs[i], *limbs[i], 0};
                 initialized[h] = true;
                 continue;
             }
 
-            LimbRef refs[6] = {
-                {&human.headHealth, limbRefs[h][0].last},
-                {&human.torsoHealth, limbRefs[h][1].last},
-                {&human.leftArmHealth, limbRefs[h][2].last},
-                {&human.rightArmHealth, limbRefs[h][3].last},
-                {&human.leftLegHealth, limbRefs[h][4].last},
-                {&human.rightLegHealth, limbRefs[h][5].last},
-            };
-
             for (int i = 0; i < 6; ++i)
             {
-                const int value = *refs[i].current;
-                const int delta = refs[i].last - value;
-                if (delta >= BREAK_DELTA)
+                LimbRef &ref = limbRefs[h][i];
+                const int value = *limbs[i];
+                if (value > ref.last)
                 {
-                    *refs[i].current = 0; // broken: renders black (practice sticks, MP confirms via server)
-                    PlayCrack();
-                    limbRefs[h][i].last = 0;
+                    // healed/reset: restart the window from the new value
+                    ref.last = value;
+                    ref.windowMs = 0;
                     continue;
                 }
-                limbRefs[h][i].last = value;
+                if (value == ref.last)
+                {
+                    ref.windowMs = 0;
+                    continue;
+                }
+
+                const int delta = ref.last - value;
+                if (delta >= BREAK_DELTA)
+                {
+                    *limbs[i] = 0; // broken: renders black (practice sticks, MP confirms via server)
+                    PlayCrack();
+                    ref.last = 0;
+                    ref.windowMs = 0;
+                    continue;
+                }
+
+                ref.windowMs += 16; // ~one frame
+                if (ref.windowMs > WINDOW_MS)
+                {
+                    // small damage spread too long to be one impact
+                    ref.last = value;
+                    ref.windowMs = 0;
+                }
             }
         }
     }
