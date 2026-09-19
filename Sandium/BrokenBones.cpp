@@ -67,6 +67,7 @@ namespace brokenbones
                    *reinterpret_cast<const float *>(reinterpret_cast<const char *>(q) + 0x70) == 0.00390625f;
         }
 
+        bool ProbeRecordSet(const RecordSet &set);
         std::vector<RecordSet> cachedSets;
         bool setsScanned = false;
 
