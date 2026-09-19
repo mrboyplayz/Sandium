@@ -296,13 +296,26 @@ void LuaManager::Initialize()
 		               static_cast<api::TextAlignment>(alignment), true);
 	};
 	// Filled rectangle via the image layer (1x1 white texture, stretched).
+	// The texture streams from the server (white.png in the manifest) -- the
+	// addon sandbox cannot see core assets. Retries until it arrives; a
+	// missing texture must never throw into the calling hook.
 	uiTable["rect"] = [](float x, float y, float w, float h,
 	                     float r, float g, float b, float a)
 	{
 		static std::shared_ptr<api::Image> white;
 		if (!white || !white->IsValid())
 		{
-			white = api::Image::Load("sandium/models/white.png");
+			const std::string path = servermedia::Path("white.png");
+			if (path.empty())
+				return;
+			try
+			{
+				white = api::Image::Load(path);
+			}
+			catch (...)
+			{
+				return;
+			}
 			white->SetLayer(0); // foreground pass -- negative layers draw behind the world
 		}
 		white->Draw(x, y, w, h, r, g, b, a);
