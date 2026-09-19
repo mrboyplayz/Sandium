@@ -44,6 +44,7 @@ add_library(
     Flags.cpp
     BrokenBones.cpp
     PosMarker.cpp
+    Noclip.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp
