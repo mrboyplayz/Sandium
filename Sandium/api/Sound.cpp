@@ -79,11 +79,16 @@ namespace api
                 result = reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr,
                                             &flags, &timestamp, &sample);
             }
-            if (FAILED(result) || (flags & MF_SOURCE_READERF_ENDOFSTREAM) || !sample)
+            if (FAILED(result) || (flags & MF_SOURCE_READERF_ENDOFSTREAM))
             {
                 SndRelease(sample);
                 audioEnd = true;
                 return false;
+            }
+            if (!sample)
+            {
+                // seek gap: the reader emits an empty sample after seeking
+                return true;
             }
             if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer)))
             {
@@ -114,6 +119,16 @@ namespace api
                     audioClient->Stop();
                     audioClient->Reset();
                     deviceRunning = false;
+                    // rewind the reader: replays must decode from the start
+                    {
+                        const std::lock_guard<std::mutex> readerLock(readerMutex);
+                        PROPVARIANT position;
+                        PropVariantInit(&position);
+                        position.vt = VT_I8;
+                        position.hVal.QuadPart = 0;
+                        reader->SetCurrentPosition(GUID_NULL, position);
+                        PropVariantClear(&position);
+                    }
                     const std::lock_guard<std::mutex> lock(audioMutex);
                     audioQueue.clear();
                     audioEnd = false;
