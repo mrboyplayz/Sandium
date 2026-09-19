@@ -326,7 +326,7 @@ namespace brokenbones
             // the legs stop bending, movement gets very weak). The physics
             // pass recomputes it, so pin it every frame after it settles.
             if (brokenLimbs[h][4] || brokenLimbs[h][5])
-                human.movementState = 6;
+                human.movementStateID = 6;
 
             for (int i = 0; i < 6; ++i)
             {
