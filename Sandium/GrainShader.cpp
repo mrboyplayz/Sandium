@@ -263,7 +263,7 @@ namespace grainshader
         }
 
         // knockout: full black fade, last so nothing draws over it
-        const float black = painshader::BlackFade();
+        const float black = painshader::BlackFade() * 0.65f; // semi-tint: see through it
         if (black > 0.005f)
         {
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

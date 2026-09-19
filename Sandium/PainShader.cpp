@@ -87,10 +87,13 @@ namespace painshader
         void GoUnconscious(float severity) // 0..1: how brutal the knockout is
         {
             unconscious = true;
+            structs::Human *koHuman = LocalHuman();
+            if (koHuman)
+                koHuman->movementStateID = 5; // vanilla knocked-down pose
             // deeper pain / harder slams keep you out longer, plus jitter
             unconTimer = 2.5f + severity * 5.0f + (std::rand() % 20) / 10.0f - 1.0f;
             blackFade = 0.0f;
-            SetSessionVolume(0.0f);
+            SetSessionVolume(0.1f); // muffled, not dead silent
             volumeDucked = true;
         }
 
@@ -137,6 +140,7 @@ namespace painshader
             exertion = 0.0f;
             sustainTimer = 0.0f;
             unconscious = false;
+            human->movementStateID = 0;
             if (volumeDucked)
             {
                 SetSessionVolume(1.0f);
@@ -208,6 +212,7 @@ namespace painshader
 
         if (unconscious)
         {
+            human->movementStateID = 5; // stay down while out
             unconTimer -= 1.0f / 60.0f;
             blackFade = std::min(blackFade + 1.0f / 60.0f / 0.35f, 1.0f);
             if (unconTimer <= 0.0f)
@@ -217,7 +222,7 @@ namespace painshader
                 sustainTimer = 0.0f;
                 if (volumeDucked)
                 {
-                    SetSessionVolume(1.0f);
+                    SetSessionVolume(0.35f); // wake up muffled, then recover
                     volumeDucked = false;
                 }
             }
