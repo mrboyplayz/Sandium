@@ -119,17 +119,36 @@ namespace noclip
         human->position.z += delta[2];
         human->alternativePosition = human->position;
 
-        // carry every bone with the body and kill all velocity so the
-        // (disabled) simulation cannot accumulate drift
+        // Carry the body the way the engine's own teleport does (RosaServer
+        // Human::teleport): every bone's pos AND pos2, plus the bone's rigid
+        // body in the client bodies array (dword index 18215710, 47-dword
+        // stride, pos at +6, vel at +9). Without the rigid bodies the
+        // physics layer never moves with us.
+        const auto stateBase = reinterpret_cast<std::uintptr_t>(addresses::Base.ptr) + 0x404A6C;
         for (int b = 0; b < 16; ++b)
         {
             structs::Bone &bone = human->bones[b];
             bone.position.x += delta[0];
             bone.position.y += delta[1];
             bone.position.z += delta[2];
+            bone.alternativePosition.x += delta[0];
+            bone.alternativePosition.y += delta[1];
+            bone.alternativePosition.z += delta[2];
             bone.velocity.x = 0.0f;
             bone.velocity.y = 0.0f;
             bone.velocity.z = 0.0f;
+
+            const int rid = bone.rigidBodyID;
+            if (rid >= 0 && rid < 65536)
+            {
+                float *body = reinterpret_cast<float *>(stateBase + 4ULL * (18215710 + 47ULL * rid));
+                body[6] += delta[0];
+                body[7] += delta[1];
+                body[8] += delta[2];
+                body[9] = 0.0f;
+                body[10] = 0.0f;
+                body[11] = 0.0f;
+            }
         }
 #endif
     }
