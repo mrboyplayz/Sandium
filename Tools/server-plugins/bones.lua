@@ -72,6 +72,8 @@ local function isBroken(human, group)
     return b and b[group]
 end
 
+local humanRefs = {}
+
 local function breakGroup(human, group)
     local key = humanKey(human)
     broken[key] = broken[key] or {}
@@ -96,8 +98,6 @@ plugin:addHook("HumanDamage", function(human, bone, damage)
 end)
 
 -- human references for the per-tick pin (cleared on delete)
-local humanRefs = {}
-
 -- per-tick: keep broken limbs at zero (health regen guard) + straight legs
 plugin:addHook("Physics", function()
     for key, human in pairs(humanRefs) do
