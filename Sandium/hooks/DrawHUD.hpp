@@ -7,8 +7,7 @@
 extern subhook::Hook *drawHUDHook;
 #include "../api/Billboards.hpp"
 #include "../BrokenBones.hpp"
-#include "../PosMarker.hpp"
-#include "../Noclip.hpp"
+#include "../PainShader.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -21,7 +20,6 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #include "../Addresses.hpp"
 #include "../BetterCrashes.hpp"
 #include "../CustomModels.hpp"
-#include "../api/Freecam.hpp"
 #include "../LuaManager.hpp"
 #include "../api/Image.hpp"
 #include "../api/ItemBillboard.hpp"
@@ -31,16 +29,13 @@ subhook::Hook *drawHUDHook;
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
 {
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
-    api::freecam::Update();
-    posmarker::Update();
-    noclip::Update();
+    painshader::Update();
     bettercrashes::Update();
     brokenbones::Update();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();
-    posmarker::Draw();
-    noclip::Draw();
+    painshader::Draw();
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
     addresses::DrawHUDFunc(a, b, c, d);

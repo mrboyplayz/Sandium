@@ -16,7 +16,6 @@
 #include <Windows.h>
 #undef DrawText
 
-#include "Freecam.hpp"
 #include "../Addresses.hpp"
 #endif
 
@@ -148,7 +147,6 @@ namespace api
 
             void HookUniformMatrix4fv(int location, int count, unsigned char transpose, const float *value)
             {
-                float freecamView[16];
                 if (count == 1 && value &&
                     SemanticFor(CurrentProgram(), location) == SEM_VIEWMATRIX)
                 {
@@ -156,15 +154,7 @@ namespace api
                     std::memcpy(lastViewMatrix, value, sizeof(lastViewMatrix));
                     lastViewTransposed = transpose != 0;
                     hasLastView = true;
-                    std::memcpy(freecamView, value, sizeof(freecamView));
-                    if (freecam::ViewOverride(freecamView, lastViewTransposed))
-                        value = freecamView;
                 }
-                float freecamMvp[16];
-                if (count == 1 && value && std::fabs(value[11] + 1.0f) < 0.01f &&
-                    SemanticFor(CurrentProgram(), location) == SEM_MODELVIEWPROJECTION &&
-                    freecam::ModelViewOverride(freecamMvp))
-                    value = freecamMvp;
                 realUniformMatrix4fv(location, count, transpose, value);
                 if (count == 1 && value)
                 {
@@ -215,10 +205,6 @@ namespace api
                     capture.hasViewPosition = true;
                     ++capture.viewPosUploads;
                 }
-                float freecamPos[3] = {x, y, z};
-                if (SemanticFor(program, location) == SEM_VIEWPOSITION &&
-                    freecam::PositionOverride(freecamPos))
-                    realUniform3f(location, freecamPos[0], freecamPos[1], freecamPos[2]);
             }
 
             // ---- memory pointer patching -------------------------------------

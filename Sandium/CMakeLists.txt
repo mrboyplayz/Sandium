@@ -35,7 +35,6 @@ add_library(
     Hooks.cpp
     Hotfixes.cpp
     LuaManager.cpp
-    api/Freecam.cpp
     Paperdoll.cpp
     Phone.cpp
     NetRedirect.cpp
@@ -43,8 +42,7 @@ add_library(
     Roster.cpp
     Flags.cpp
     BrokenBones.cpp
-    PosMarker.cpp
-    Noclip.cpp
+    PainShader.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp
