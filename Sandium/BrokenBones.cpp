@@ -322,6 +322,12 @@ namespace brokenbones
                 if (brokenLimbs[h][i] && limbRefs[h][i].current)
                     *limbRefs[h][i].current = 0;
 
+            // broken legs: vanilla's crippled movement state (straight legs --
+            // the legs stop bending, movement gets very weak). The physics
+            // pass recomputes it, so pin it every frame after it settles.
+            if (brokenLimbs[h][4] || brokenLimbs[h][5])
+                human.movementState = 6;
+
             for (int i = 0; i < 6; ++i)
             {
                 if (brokenLimbs[h][i])
