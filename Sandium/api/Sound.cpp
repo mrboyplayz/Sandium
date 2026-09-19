@@ -137,6 +137,23 @@ namespace api
                 UINT32 padding = 0;
                 if (FAILED(audioClient->GetCurrentPadding(&padding)))
                     break;
+
+                // one-shot: once the stream is decoded AND the device has
+                // played out everything buffered, stop (padding would never
+                // reach zero if we kept topping the buffer up with silence)
+                std::size_t availableNow = 0;
+                {
+                    const std::lock_guard<std::mutex> lock(audioMutex);
+                    availableNow = audioQueue.size() / audioChannels;
+                }
+                if (audioEnd && availableNow == 0)
+                {
+                    if (padding == 0)
+                        playing = false;
+                    Sleep(4);
+                    continue;
+                }
+
                 UINT32 frames = audioBufferFrames - padding;
                 if (frames > 0)
                 {
@@ -175,9 +192,6 @@ namespace api
                     if (!DecodeAudioChunk())
                         break;
                 }
-                // one-shot: end of stream stops playback
-                if (audioEnd && bufferedFrames() == 0)
-                    playing = false;
                 Sleep(4);
             }
             CoUninitialize();

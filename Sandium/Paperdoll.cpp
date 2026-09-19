@@ -33,6 +33,13 @@ namespace paperdoll
         constexpr float THROW_TURN = 1.04719755f; // 60 degrees: turn the doll to look left
         float throwBlend = 0.0f;             // 0 = normal, 1 = full throw pose
         int paperdollFlushIndex = 0;
+        // broken-bone black tint: the current doll's limb HPs (draw slots are
+        // remapped to skeleton bone ids through the client's remap table, then
+        // mapped to their health group)
+        int dollHP[6] = {};
+        int paperdollBoneSlot = 0;
+        float paperdollLastCx = 0.0f, paperdollLastCy = 0.0f;
+        bool paperdollHasCentroid = false;
         bool sdlKeysResolved = false;
         using SDLKeysFn = const unsigned char *(*)(const unsigned char *);
         SDLKeysFn sdlKeys = nullptr;
@@ -115,6 +122,54 @@ namespace paperdoll
                 (outline || fill);
             if (drawingPaperdoll && capsule)
             {
+                float* buffer = &At<float>(verticesRva);
+
+                // track the draw slot by capsule centroid (injury overlays
+                // share their bone's geometry and must not advance it)
+                float cx = 0.0f, cy = 0.0f;
+                for (int v = 0; v < count; ++v)
+                {
+                    cx += buffer[v * 9];
+                    cy += buffer[v * 9 + 1];
+                }
+                cx /= count;
+                cy /= count;
+                if (!paperdollHasCentroid ||
+                    std::fabs(cx - paperdollLastCx) + std::fabs(cy - paperdollLastCy) > 6.0f)
+                    ++paperdollBoneSlot;
+                paperdollLastCx = cx;
+                paperdollLastCy = cy;
+                paperdollHasCentroid = true;
+
+                // broken bone -> black: remap slot to skeleton bone id, then
+                // to its health group (3 head, 0-2 torso, 4-6 left arm,
+                // 7-9 right arm, 10-12 left leg, 13-15 right leg)
+                if (paperdollBoneSlot >= 0 && paperdollBoneSlot < 16)
+                {
+                    const int boneId = static_cast<int>(At<std::uint32_t>(
+                        0x404A6C + 4ULL * (282486070 + 25ULL * paperdollBoneSlot)));
+                    if (boneId >= 0 && boneId < 16)
+                    {
+                        int group = -1;
+                        if (boneId == 3) group = 0;
+                        else if (boneId <= 2) group = 1;
+                        else if (boneId <= 6) group = 2;
+                        else if (boneId <= 9) group = 3;
+                        else if (boneId <= 12) group = 4;
+                        else group = 5;
+                        if (group >= 0 && dollHP[group] <= 0)
+                        {
+                            for (int v = 0; v < count; ++v)
+                            {
+                                buffer[v * 9 + 5] = 0.03f;
+                                buffer[v * 9 + 6] = 0.03f;
+                                buffer[v * 9 + 7] = 0.03f;
+                                buffer[v * 9 + 8] = 1.0f;
+                            }
+                        }
+                    }
+                }
+
                 // limbs draw in bone order (0..15); map this flush to a bone
                 const int bone = paperdollFlushIndex++;
                 const bool throwing = throwBlend > 0.01f;
@@ -186,13 +241,19 @@ namespace paperdoll
             const float savedViewYaw = viewYaw;
             viewYaw += THROW_TURN * throwBlend;
 
-            if (selectedShape == 0)
-            {
-                originalPaperdoll(human, x, y);
-                viewYaw = savedViewYaw;
-                return;
-            }
-            // Only intercept flushes during this HUD element, never the world or other UI.
+            // broken-limb health for the black tint
+            dollHP[0] = addresses::Humans[human].headHealth;
+            dollHP[1] = addresses::Humans[human].torsoHealth;
+            dollHP[2] = addresses::Humans[human].leftArmHealth;
+            dollHP[3] = addresses::Humans[human].rightArmHealth;
+            dollHP[4] = addresses::Humans[human].leftLegHealth;
+            dollHP[5] = addresses::Humans[human].rightLegHealth;
+            paperdollBoneSlot = 0;
+            paperdollHasCentroid = false;
+            paperdollLastCx = paperdollLastCy = 0.0f;
+
+            // Intercept flushes for this HUD element (shape rewriting and the
+            // broken-bone tint), never the world or other UI.
             subhook::ScopedHookInstall install(&flushHook);
             drawingPaperdoll = true;
             originalPaperdoll(human, x, y);
