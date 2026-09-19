@@ -24,6 +24,7 @@ namespace grainshader
         bool failed = false;
         bool reported = false;
         GLuint program = 0;
+        GLuint vao = 0;
         GLint timeLocation = -1, amountLocation = -1, darkLocation = -1;
         const auto started = std::chrono::steady_clock::now();
 
@@ -70,7 +71,7 @@ namespace grainshader
                              "  float n = rand(coord);\n"
                              "  vec2 d = vUv - 0.5;\n"
                              "  float r2 = dot(d, d);\n"
-                             "  float weight = 0.25 + 1.0 / (0.08 + r2 * 4.0);\n"
+                             "  float weight = 0.4 + 1.6 * smoothstep(0.1, 0.7, sqrt(r2) * 2.0);\n"
                              "  float g = (n - 0.5) * uAmount * weight;\n"
                              "  if (uDark > 0.5)\n"
                              "    color = vec4(1.0) - vec4(max(-g, 0.0));\n"
@@ -101,8 +102,9 @@ namespace grainshader
             timeLocation = glGetUniformLocation(program, "uTime");
             amountLocation = glGetUniformLocation(program, "uAmount");
             darkLocation = glGetUniformLocation(program, "uDark");
-            ready = true;
-            return true;
+            glGenVertexArrays(1, &vao);
+            ready = vao != 0;
+            return ready;
         }
     }
 
@@ -123,7 +125,7 @@ namespace grainshader
             reported = true;
             if (std::FILE *f = std::fopen("sandium_grain.txt", "w"))
             {
-                std::fprintf(f, "ready=%d program=%u amount=%.2f\n", ready ? 1 : 0, program, amount);
+                std::fprintf(f, "ready=%d program=%u vao=%u amount=%.2f\n", ready ? 1 : 0, program, vao, amount);
                 std::fclose(f);
             }
         }
@@ -148,7 +150,7 @@ namespace grainshader
             glUniform2f(timeLocation, seconds, seconds - std::floor(seconds));
         if (amountLocation >= 0)
             glUniform1f(amountLocation, amount);
-        glBindVertexArray(0);
+        glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         // pass 1: additive white speckle (zb_grainwhite)
