@@ -82,6 +82,11 @@ namespace brokenbones
         void PlayCrack(float volume);
         void PlayCrackForEvent(float x, float y, float z)
         {
+            // the local detector already sounded first-active-human breaks
+            // instantly; skip the duplicate event arriving ~1s later
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastCrack).count() < 1500)
+                return;
             for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
             {
                 if (!addresses::Humans[h].isActive.b1)
