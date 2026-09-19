@@ -8,13 +8,12 @@
 #include <cstdio>
 #include <chrono>
 
-// Faithful GLSL port of the decompiled Source grain shaders (zb_grain /
-// zb_grainwhite, ps_2_x). The original: two frac(time*k+0.5) -> sincos chains
-// build a per-frame random offset, pixel coords * 1024 + the offset feed the
-// classic frac(sin(dot(co, consts)) * big) white-noise hash, weighted by
-// 1/distance^2 from screen center. Drawn as two passes over the finished
-// frame: additive white speckle (grainwhite) + multiplicative dark speckle
-// (grain). Base intensity is a visible cinematic layer; pain cranks it up.
+// Fullscreen post pass: red pain vignette + two-pass film grain (the
+// decompiled Source zb_grain/zb_grainwhite logic: per-frame seeded noise,
+// pixel-locked hash, edge weighting). Everything is computed in real
+// viewport space so the vignette center is always the true screen center,
+// and the vignette is oversized + slowly wobbling at high pain (Homigrad
+// style) so its edge can never be seen.
 
 namespace grainshader
 {
@@ -25,7 +24,8 @@ namespace grainshader
         bool reported = false;
         GLuint program = 0;
         GLuint vao = 0;
-        GLint timeLocation = -1, amountLocation = -1, darkLocation = -1;
+        GLint timeLocation = -1, amountLocation = -1, modeLocation = -1,
+              aspectLocation = -1, painLocation = -1;
         const auto started = std::chrono::steady_clock::now();
 
         GLuint Compile(GLenum type, const char *source)
@@ -50,7 +50,6 @@ namespace grainshader
             if (failed)
                 return false;
 
-            // fullscreen triangle from gl_VertexID, no buffers
             const char *vs = "#version 330 core\n"
                              "out vec2 vUv;\n"
                              "void main(){\n"
@@ -61,8 +60,10 @@ namespace grainshader
             const char *fs = "#version 330 core\n"
                              "in vec2 vUv;\n"
                              "uniform vec2 uTime;\n"
-                             "uniform float uAmount;\n"
-                             "uniform float uDark;   // 1 = dark pass, 0 = light pass\n"
+                             "uniform float uAmount;  // grain strength\n"
+                             "uniform float uMode;    // 0 vignette, 1 white grain, 2 dark grain\n"
+                             "uniform float uAspect;  // width / height\n"
+                             "uniform float uPain;    // pain 0..1\n"
                              "out vec4 color;\n"
                              "float hash(vec2 p){\n"
                              "  p = fract(p * vec2(123.34, 456.21));\n"
@@ -70,6 +71,24 @@ namespace grainshader
                              "  return fract(p.x * p.y);\n"
                              "}\n"
                              "void main(){\n"
+                             "  if (uMode < 0.5){\n"
+                             "    vec2 uv = (vUv - 0.5) * 1.45 + 0.5;\n"
+                             "    float t = uTime.x;\n"
+                             "    float wob = uPain * uPain;\n"
+                             "    float ang = (sin(t * 0.7) + sin(t * 0.43 + 1.7)) * 0.035 * wob;\n"
+                             "    float ca = cos(ang), sa = sin(ang);\n"
+                             "    uv -= 0.5;\n"
+                             "    uv = vec2(uv.x * ca - uv.y * sa, uv.x * sa + uv.y * ca);\n"
+                             "    uv += 0.5;\n"
+                             "    uv += vec2(sin(t * 0.9), cos(t * 0.61)) * 0.012 * wob;\n"
+                             "    vec2 d = (uv - 0.5) * vec2(uAspect, 1.0);\n"
+                             "    float dist = length(d);\n"
+                             "    float inner = mix(0.85, 0.08, uPain);\n"
+                             "    float a = smoothstep(inner, inner + 0.55, dist) * uPain;\n"
+                             "    a += smoothstep(0.95, 1.25, dist) * uPain * 0.4;\n"
+                             "    color = vec4(vec3(0.52, 0.01, 0.01), clamp(a, 0.0, 0.92));\n"
+                             "    return;\n"
+                             "  }\n"
                              "  float j = hash(vec2(uTime.x * 2.72154951, uTime.y)) * 13.0;\n"
                              "  vec2 coord = floor(vUv * 1024.0) + j;\n"
                              "  float n = hash(coord);\n"
@@ -77,7 +96,7 @@ namespace grainshader
                              "  float r2 = dot(d, d);\n"
                              "  float weight = mix(0.6, 1.6, smoothstep(0.2, 0.75, sqrt(r2) * 2.0));\n"
                              "  float g = (n - 0.5) * uAmount * weight;\n"
-                             "  if (uDark > 0.5)\n"
+                             "  if (uMode > 1.5)\n"
                              "    color = vec4(1.0) - vec4(max(-g, 0.0) * 0.8);\n"
                              "  else\n"
                              "    color = vec4(max(g, 0.0) * 0.8);\n"
@@ -105,10 +124,25 @@ namespace grainshader
             }
             timeLocation = glGetUniformLocation(program, "uTime");
             amountLocation = glGetUniformLocation(program, "uAmount");
-            darkLocation = glGetUniformLocation(program, "uDark");
+            modeLocation = glGetUniformLocation(program, "uMode");
+            aspectLocation = glGetUniformLocation(program, "uAspect");
+            painLocation = glGetUniformLocation(program, "uPain");
             glGenVertexArrays(1, &vao);
             ready = vao != 0;
             return ready;
+        }
+
+        void DrawPass(float mode, float seconds, float amount, float aspect, float pain)
+        {
+            if (modeLocation >= 0)
+                glUniform1f(modeLocation, mode);
+            if (amountLocation >= 0)
+                glUniform1f(amountLocation, amount);
+            if (aspectLocation >= 0)
+                glUniform1f(aspectLocation, aspect);
+            if (painLocation >= 0)
+                glUniform1f(painLocation, pain);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
         }
     }
 
@@ -118,11 +152,8 @@ namespace grainshader
         if (!EnsureProgram())
             return;
 
-        // pain 0 = NO grain at all; 2 = a little; 10 = heavy
-        const float amount = painshader::Intensity() * 0.55f;
-        if (amount < 0.03f)
-            return;
-
+        const float pain01 = painshader::Intensity(); // 0..1
+        const float grainAmount = pain01 * 0.55f;
         const float seconds = std::chrono::duration<float>(
                                   std::chrono::steady_clock::now() - started).count();
 
@@ -131,10 +162,15 @@ namespace grainshader
             reported = true;
             if (std::FILE *f = std::fopen("sandium_grain.txt", "w"))
             {
-                std::fprintf(f, "ready=%d program=%u vao=%u amount=%.2f\n", ready ? 1 : 0, program, vao, amount);
+                std::fprintf(f, "ready=%d program=%u vao=%u pain=%.2f\n",
+                             ready ? 1 : 0, program, vao, pain01);
                 std::fclose(f);
             }
         }
+
+        GLint viewport[4] = {};
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        const float aspect = viewport[3] > 0 ? static_cast<float>(viewport[2]) / static_cast<float>(viewport[3]) : 1.0f;
 
         GLint previousProgram = 0;
         glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
@@ -154,21 +190,21 @@ namespace grainshader
         glUseProgram(program);
         if (timeLocation >= 0)
             glUniform2f(timeLocation, seconds, seconds - std::floor(seconds));
-        if (amountLocation >= 0)
-            glUniform1f(amountLocation, amount);
         glBindVertexArray(vao);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-        // pass 1: additive white speckle (zb_grainwhite)
-        if (darkLocation >= 0)
-            glUniform1f(darkLocation, 0.0f);
-        glBlendFunc(GL_ONE, GL_ONE);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
-        // pass 2: multiplicative dark speckle (zb_grain)
-        if (darkLocation >= 0)
-            glUniform1f(darkLocation, 1.0f);
-        glBlendFunc(GL_ZERO, GL_SRC_COLOR);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (pain01 > 0.02f)
+        {
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            DrawPass(0.0f, seconds, 0.0f, aspect, pain01);
+        }
+        if (grainAmount > 0.03f)
+        {
+            glBlendFunc(GL_ONE, GL_ONE);
+            DrawPass(1.0f, seconds, grainAmount, aspect, pain01);
+            glBlendFunc(GL_ZERO, GL_SRC_COLOR);
+            DrawPass(2.0f, seconds, grainAmount, aspect, pain01);
+        }
 
         glUseProgram(static_cast<GLuint>(previousProgram));
         glBindVertexArray(static_cast<GLuint>(previousVao));
