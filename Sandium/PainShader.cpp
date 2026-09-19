@@ -141,7 +141,8 @@ namespace painshader
             lastPain = 0.0f;
             sustainTimer = 0.0f;
             unconscious = false;
-            human->movementStateID = 0;
+            if (human)
+                human->movementStateID = 0;
             if (volumeDucked)
             {
                 SetSessionVolume(1.0f);
