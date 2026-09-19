@@ -85,7 +85,7 @@ local function breakGroup(human, group)
 end
 
 -- break detection
-Hook("HumanDamage", function(human, bone, damage)
+plugin:addHook("HumanDamage", function(human, bone, damage)
     if damage < BREAK_DAMAGE then return end
     local group = groupIndexForBone(bone)
     if not group then return end
@@ -99,7 +99,7 @@ end)
 local humanRefs = {}
 
 -- per-tick: keep broken limbs at zero (health regen guard) + straight legs
-Hook("Physics", function()
+plugin:addHook("Physics", function()
     for key, human in pairs(humanRefs) do
         local groups = broken[key]
         if groups and human then
@@ -116,7 +116,7 @@ Hook("Physics", function()
 end)
 
 -- chat commands: 'break arm' / 'break leg' breaks the speaker's own limb
-Hook("PlayerChat", function(ply, message)
+plugin:addHook("PlayerChat", function(ply, message)
     if not message then return end
     local msg = message:lower()
     local human = ply.human
@@ -131,7 +131,7 @@ Hook("PlayerChat", function(ply, message)
 end)
 
 -- the dangle: broken limbs lose their IK drive (strength zero)
-Hook("HumanLimbInverseKinematics", function(human, trunkBoneID, branchBoneID,
+plugin:addHook("HumanLimbInverseKinematics", function(human, trunkBoneID, branchBoneID,
         destination, destinationAxis, vecA, a, rot, strength, vecB, vecC, vecD, flags)
     local trunkGroup = groupIndexForBone(trunkBoneID)
     local branchGroup = groupIndexForBone(branchBoneID)
@@ -141,7 +141,7 @@ Hook("HumanLimbInverseKinematics", function(human, trunkBoneID, branchBoneID,
 end)
 
 -- cleanup
-Hook("HumanDelete", function(human)
+plugin:addHook("HumanDelete", function(human)
     local key = humanKey(human)
     broken[key] = nil
     humanRefs[key] = nil
