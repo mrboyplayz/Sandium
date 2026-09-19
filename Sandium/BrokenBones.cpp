@@ -9,6 +9,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
+#include <cctype>
+#include <cstdlib>
 #include <vector>
 
 #if _WIN32
@@ -168,10 +171,64 @@ namespace brokenbones
                 lastCrack = now;
             }
         }
+        // limb group indices: 0 head, 1 torso, 2 left arm, 3 right arm, 4 left leg, 5 right leg
+        void BreakLimb(std::size_t human, int limbGroup)
+        {
+            static const int *groupBones[6] = {
+                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+            (void)groupBones;
+            static int boneLists[6][3] = {
+                {3, -1, -1}, {0, 1, 2}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}, {13, 14, 15}};
+            structs::Human &humanRef = addresses::Humans[human];
+            int *limbs[6] = {&humanRef.headHealth, &humanRef.torsoHealth, &humanRef.leftArmHealth,
+                             &humanRef.rightArmHealth, &humanRef.leftLegHealth, &humanRef.rightLegHealth};
+            *limbs[limbGroup] = 0;
+            brokenLimbs[human][limbGroup] = true;
+            limbRefs[human][limbGroup] = {limbs[limbGroup], 0};
+            initialized[human] = true;
+            PlayCrack();
+            BreakBoneDrives(limbGroup);
+        }
+
+        // Chat test commands: typing "break arm" / "break leg" in chat breaks
+        // a random side on the local human (the chat input buffer is client
+        // state dword index 283785913, 60 chars).
+        void CheckChatCommands()
+        {
+            static char lastCommand[61] = {};
+            const char *chat = reinterpret_cast<const char *>(
+                reinterpret_cast<const char *>(addresses::Base.ptr) + 0x404A6C + 4ULL * 283785913);
+            char lower[61];
+            std::size_t i = 0;
+            for (; i < 60 && chat[i]; ++i)
+                lower[i] = (char)tolower((unsigned char)chat[i]);
+            lower[i] = 0;
+            if (std::strcmp(lower, lastCommand) == 0)
+                return;
+            std::strncpy(lastCommand, lower, 60);
+
+            for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+            {
+                if (!addresses::Humans[h].isActive.b1)
+                    continue;
+                // first active human = local in practice mode
+                const bool arm = std::strcmp(lower, "break arm") == 0;
+                const bool leg = std::strcmp(lower, "break leg") == 0;
+                if (arm || leg)
+                {
+                    const int side = rand() % 2;
+                    BreakLimb(h, arm ? 2 + side : 4 + side);
+                }
+                return;
+            }
+        }
+
+
     }
 
     void Update()
     {
+        CheckChatCommands();
         // periodic ground-truth dump of the local human's limb HP
         if (++diagFrames % 120 == 0)
         {
