@@ -1,6 +1,7 @@
 #include "Noclip.hpp"
 
 #include "Addresses.hpp"
+#include "api/GLUniforms.hpp"
 #include "api/Text.hpp"
 #include "structs/Human.hpp"
 
@@ -96,13 +97,23 @@ namespace noclip
         if (!active)
             return;
 
-        // fly: aim direction from the body's view angles
-        const float yaw = human->viewYaw;
-        const float pitch = human->viewPitch;
-        const float cy = std::cos(yaw), sy = std::sin(yaw);
-        const float cp = std::cos(pitch), sp = std::sin(pitch);
-        const float forward[3] = {sy * cp, sp, cy * cp};
-        const float right[3] = {cy, 0.0f, -sy};
+        // fly along the actual view axes (same source as the freecam, which
+        // steers correctly by construction -- no yaw convention guessing)
+        float forward[3] = {0.0f, 0.0f, 1.0f}, right[3] = {1.0f, 0.0f, 0.0f};
+        if (api::glcap::HasLastView())
+        {
+            const float *view = api::glcap::LastViewMatrix();
+            if (api::glcap::LastViewTransposed())
+            {
+                right[0] = view[0]; right[1] = view[4]; right[2] = view[8];
+                forward[0] = -view[2]; forward[1] = -view[6]; forward[2] = -view[10];
+            }
+            else
+            {
+                right[0] = view[0]; right[1] = view[1]; right[2] = view[2];
+                forward[0] = -view[8]; forward[1] = -view[9]; forward[2] = -view[10];
+            }
+        }
 
         const bool shift = keys[KEY_LSHIFT] != 0;
         const float move = (shift ? 30.0f : 10.0f) * 0.016f;
@@ -113,6 +124,14 @@ namespace noclip
         if (keys[KEY_A]) { delta[0] -= right[0] * move; delta[1] -= right[1] * move; delta[2] -= right[2] * move; }
         if (keys[KEY_SPACE]) delta[1] += move;
         if (keys[KEY_LCTRL] || keys[KEY_RCTRL]) delta[1] -= move;
+
+        // safety: a single frame may never fling the body
+        const float len = std::sqrt(delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]);
+        if (len > 1.0f)
+        {
+            const float scale = 1.0f / len;
+            delta[0] *= scale; delta[1] *= scale; delta[2] *= scale;
+        }
 
         human->position.x += delta[0];
         human->position.y += delta[1];
@@ -148,6 +167,38 @@ namespace noclip
                 body[9] = 0.0f;
                 body[10] = 0.0f;
                 body[11] = 0.0f;
+            }
+        }
+
+        // held/holstered items: teleportHumanWithItems moves them too -- a
+        // held item left behind makes its hand bond drag the body
+        for (const structs::InventorySlot &slot : human->inventorySlots)
+        {
+            for (const int itemId : {slot.firstPlaceItemID, slot.secondPlaceItemID})
+            {
+                if (itemId < 0 || static_cast<std::size_t>(itemId) >= structs::Item::VanillaCount)
+                    continue;
+                structs::Item &item = addresses::Items[itemId];
+                if (!item.isActive.b1)
+                    continue;
+                item.position.x += delta[0];
+                item.position.y += delta[1];
+                item.position.z += delta[2];
+                item.alternativePosition = item.position;
+                item.velocity.x = 0.0f;
+                item.velocity.y = 0.0f;
+                item.velocity.z = 0.0f;
+                const int irid = item.rigidBodyID;
+                if (irid >= 0 && irid < 65536)
+                {
+                    float *body = reinterpret_cast<float *>(stateBase + 4ULL * (18215710 + 47ULL * irid));
+                    body[6] += delta[0];
+                    body[7] += delta[1];
+                    body[8] += delta[2];
+                    body[9] = 0.0f;
+                    body[10] = 0.0f;
+                    body[11] = 0.0f;
+                }
             }
         }
 #endif
