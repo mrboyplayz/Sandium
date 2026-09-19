@@ -39,6 +39,8 @@ namespace brokenbones
         // drop within a short window instead of a single frame.
         LimbRef limbRefs[structs::Human::VanillaCount][6] = {};
         bool initialized[structs::Human::VanillaCount] = {};
+        // broken bones do not heal: pinned at zero until the human despawns
+        bool brokenLimbs[structs::Human::VanillaCount][6] = {};
         constexpr int WINDOW_MS = 400;
 
         unsigned int diagFrames = 0;
@@ -104,8 +106,15 @@ namespace brokenbones
             if (!human.isActive.b1)
             {
                 initialized[h] = false;
+                for (int i = 0; i < 6; ++i)
+                    brokenLimbs[h][i] = false;
                 continue;
             }
+
+            // keep broken limbs at zero even through the game's health regen
+            for (int i = 0; i < 6; ++i)
+                if (brokenLimbs[h][i])
+                    *limbRefs[h][i].current = 0;
             int *limbs[6] = {&human.headHealth, &human.torsoHealth, &human.leftArmHealth,
                              &human.rightArmHealth, &human.leftLegHealth, &human.rightLegHealth};
 
@@ -119,6 +128,8 @@ namespace brokenbones
 
             for (int i = 0; i < 6; ++i)
             {
+                if (brokenLimbs[h][i])
+                    continue;
                 LimbRef &ref = limbRefs[h][i];
                 const int value = *limbs[i];
                 if (value > ref.last)
@@ -138,6 +149,7 @@ namespace brokenbones
                 if (delta >= BREAK_DELTA)
                 {
                     *limbs[i] = 0; // broken: renders black (practice sticks, MP confirms via server)
+                    brokenLimbs[h][i] = true;
                     PlayCrack();
                     ref.last = 0;
                     ref.windowMs = 0;
