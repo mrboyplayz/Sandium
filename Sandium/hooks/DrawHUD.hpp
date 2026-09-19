@@ -8,6 +8,7 @@ extern subhook::Hook *drawHUDHook;
 #include "../api/Billboards.hpp"
 #include "../BrokenBones.hpp"
 #include "../PainShader.hpp"
+#include "../CameraFX.hpp"
 #include "../GrainShader.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
@@ -31,6 +32,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
 {
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     painshader::Update();
+    camerafx::Update();
     bettercrashes::Update();
     brokenbones::Update();
     api::BeginLuaDrawing();

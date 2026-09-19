@@ -17,6 +17,8 @@
 #undef DrawText
 
 #include "../Addresses.hpp"
+
+#include "../CameraFX.hpp"
 #endif
 
 namespace api
@@ -147,6 +149,7 @@ namespace api
 
             void HookUniformMatrix4fv(int location, int count, unsigned char transpose, const float *value)
             {
+                float fxView[16];
                 if (count == 1 && value &&
                     SemanticFor(CurrentProgram(), location) == SEM_VIEWMATRIX)
                 {
@@ -154,6 +157,9 @@ namespace api
                     std::memcpy(lastViewMatrix, value, sizeof(lastViewMatrix));
                     lastViewTransposed = transpose != 0;
                     hasLastView = true;
+                    std::memcpy(fxView, value, sizeof(fxView));
+                    if (camerafx::ViewOverride(fxView, lastViewTransposed))
+                        value = fxView;
                 }
                 realUniformMatrix4fv(location, count, transpose, value);
                 if (count == 1 && value)

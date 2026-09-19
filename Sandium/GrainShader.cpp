@@ -24,8 +24,11 @@ namespace grainshader
         bool reported = false;
         GLuint program = 0;
         GLuint vao = 0;
+        GLuint blurTex = 0;
+        int blurW = 0, blurH = 0;
         GLint timeLocation = -1, amountLocation = -1, modeLocation = -1,
-              aspectLocation = -1, painLocation = -1;
+              aspectLocation = -1, painLocation = -1, texLocation = -1,
+              offLocation = -1, alphaLocation = -1;
         const auto started = std::chrono::steady_clock::now();
 
         GLuint Compile(GLenum type, const char *source)
@@ -63,7 +66,10 @@ namespace grainshader
                              "uniform float uAmount;  // grain strength\n"
                              "uniform float uMode;    // 0 vignette, 1 white grain, 2 dark grain\n"
                              "uniform float uAspect;  // width / height\n"
-                             "uniform float uPain;    // pain 0..1\n"
+                             "uniform float uPain;    // pain 0..1 / black fade\n"
+                             "uniform sampler2D uTex;\n"
+                             "uniform vec2 uOff;\n"
+                             "uniform float uAlpha;\n"
                              "out vec4 color;\n"
                              "float hash(vec2 p){\n"
                              "  p = fract(p * vec2(123.34, 456.21));\n"
@@ -71,6 +77,14 @@ namespace grainshader
                              "  return fract(p.x * p.y);\n"
                              "}\n"
                              "void main(){\n"
+                             "  if (uMode > 2.5 && uMode < 3.5){\n"
+                             "    color = vec4(0.0, 0.0, 0.0, uPain);\n"
+                             "    return;\n"
+                             "  }\n"
+                             "  if (uMode > 3.5){\n"
+                             "    color = vec4(texture(uTex, vUv + uOff).rgb, uAlpha);\n"
+                             "    return;\n"
+                             "  }\n"
                              "  if (uMode < 0.5){\n"
                              "    vec2 uv = (vUv - 0.5) * 1.45 + 0.5;\n"
                              "    float t = uTime.x;\n"
@@ -127,6 +141,9 @@ namespace grainshader
             modeLocation = glGetUniformLocation(program, "uMode");
             aspectLocation = glGetUniformLocation(program, "uAspect");
             painLocation = glGetUniformLocation(program, "uPain");
+            texLocation = glGetUniformLocation(program, "uTex");
+            offLocation = glGetUniformLocation(program, "uOff");
+            alphaLocation = glGetUniformLocation(program, "uAlpha");
             glGenVertexArrays(1, &vao);
             ready = vao != 0;
             return ready;
@@ -142,6 +159,10 @@ namespace grainshader
                 glUniform1f(aspectLocation, aspect);
             if (painLocation >= 0)
                 glUniform1f(painLocation, pain);
+            if (offLocation >= 0)
+                glUniform2f(offLocation, 0.0f, 0.0f);
+            if (alphaLocation >= 0)
+                glUniform1f(alphaLocation, 1.0f);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         }
     }
@@ -204,6 +225,49 @@ namespace grainshader
             DrawPass(1.0f, seconds, grainAmount, aspect, pain01);
             glBlendFunc(GL_ZERO, GL_SRC_COLOR);
             DrawPass(2.0f, seconds, grainAmount, aspect, pain01);
+        }
+
+        // severe-pain blur: smear the frame with offset copies of itself
+        const float blur = painshader::Blur();
+        if (blur > 0.02f && viewport[2] > 0 && viewport[3] > 0)
+        {
+            if (blurTex == 0 || blurW != viewport[2] || blurH != viewport[3])
+            {
+                if (blurTex == 0)
+                    glGenTextures(1, &blurTex);
+                glBindTexture(GL_TEXTURE_2D, blurTex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, viewport[2], viewport[3], 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                blurW = viewport[2];
+                blurH = viewport[3];
+            }
+            glBindTexture(GL_TEXTURE_2D, blurTex);
+            glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, viewport[2], viewport[3], 0);
+            if (texLocation >= 0)
+                glUniform1i(texLocation, 0);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            const float radius = (2.0f + 6.0f * blur) / static_cast<float>(viewport[2]);
+            const float alpha = 0.10f + 0.15f * blur;
+            for (int i = 0; i < 4; ++i)
+            {
+                const float a = 6.2831853f * i / 4.0f;
+                if (offLocation >= 0)
+                    glUniform2f(offLocation, std::cos(a) * radius, std::sin(a) * radius);
+                if (alphaLocation >= 0)
+                    glUniform1f(alphaLocation, alpha);
+                if (modeLocation >= 0)
+                    glUniform1f(modeLocation, 4.0f);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
+        }
+
+        // knockout: full black fade, last so nothing draws over it
+        const float black = painshader::BlackFade();
+        if (black > 0.005f)
+        {
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            DrawPass(3.0f, seconds, 0.0f, aspect, black);
         }
 
         glUseProgram(static_cast<GLuint>(previousProgram));

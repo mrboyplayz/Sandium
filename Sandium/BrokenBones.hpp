@@ -11,4 +11,6 @@ namespace brokenbones
 
     // Number of broken limbs on the local human (0..6).
     int BrokenCount();
+    // Broken leg / arm counts on the local human.
+    void BrokenLimbs(int &legs, int &arms);
 }

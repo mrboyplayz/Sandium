@@ -15,7 +15,16 @@
 #include <cmath>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+
+#if _WIN32
+#define NOMINMAX
+#include <audioclient.h>
+#include <mmdeviceapi.h>
+#include <Windows.h>
+extern void *SandiumMMDeviceEnumerator;
+#endif
 
 // Pain overlay. The vignette is a procedurally generated radial alpha
 // gradient (white, tinted red at draw time through the image layer's color
@@ -35,6 +44,55 @@ namespace painshader
         bool hadHuman = false;
         float lastPain = 0.0f; // 0..10
 
+        // unconsciousness: maxed pain sustained, or one huge slam, knocks the
+        // player out for a few seconds -- screen fades to black and the whole
+        // audio session ducks to silence, then recovers.
+        bool unconscious = false;
+        float unconTimer = 0.0f;
+        float sustainTimer = 0.0f;
+        float immunity = 0.0f;
+        float blackFade = 0.0f;
+        bool volumeDucked = false;
+        float exertion = 0.0f;
+        bool exertionValid = false;
+        float lastX = 0.0f, lastY = 0.0f, lastZ = 0.0f;
+
+        void SetSessionVolume(float volume)
+        {
+            static void *simpleAudioVolume = nullptr;
+            static bool attempted = false;
+            if (!attempted)
+            {
+                attempted = true;
+                IMMDeviceEnumerator *enumerator = nullptr;
+                IMMDevice *device = nullptr;
+                IAudioClient *client = nullptr;
+                if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                               __uuidof(IMMDeviceEnumerator),
+                                               reinterpret_cast<void **>(&enumerator))) &&
+                    enumerator && SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device)) &&
+                    device && SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
+                                                         reinterpret_cast<void **>(&client))) &&
+                    client)
+                    client->GetService(__uuidof(ISimpleAudioVolume),
+                                       reinterpret_cast<void **>(&simpleAudioVolume));
+                if (enumerator) enumerator->Release();
+                if (device) device->Release();
+                if (client) client->Release();
+            }
+            if (simpleAudioVolume)
+                reinterpret_cast<ISimpleAudioVolume *>(simpleAudioVolume)->SetMasterVolume(volume, nullptr);
+        }
+
+        void GoUnconscious()
+        {
+            unconscious = true;
+            unconTimer = 4.0f + (std::rand() % 30) / 10.0f;
+            blackFade = 0.0f;
+            SetSessionVolume(0.0f);
+            volumeDucked = true;
+        }
+
         float SmoothStep(float a, float b, float x)
         {
             const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f);
@@ -53,6 +111,15 @@ namespace painshader
     float PainLevel()
     {
         return lastPain;
+    }
+
+    float Blur()
+    {
+#if _WIN32
+        return std::clamp((lastPain / 10.0f - 0.7f) / 0.3f, 0.0f, 1.0f);
+#else
+        return 0.0f;
+#endif
     }
 
     void Update()
@@ -97,11 +164,80 @@ namespace painshader
         // Pain scale 0..10: broken bones dominate (+1.67 each), heavy total
         // damage adds up to +3, a fresh hit adds its acute burst.
         const float broken = static_cast<float>(brokenbones::BrokenCount());
+
+        // moving on broken limbs keeps hurting: pain creeps up while walking
+        int brokenLegs = 0, brokenArms = 0;
+        brokenbones::BrokenLimbs(brokenLegs, brokenArms);
+        const float dxp = human->position.x - lastX;
+        const float dyp = human->position.y - lastY;
+        const float dzp = human->position.z - lastZ;
+        const float moved = sqrtf(dxp * dxp + dyp * dyp + dzp * dzp);
+        if (exertionValid && moved > 0.02f && moved < 2.0f)
+        {
+            if (brokenLegs > 0)
+                exertion += moved * 0.55f * (float)brokenLegs;
+            if (brokenArms > 0)
+                exertion += moved * 0.20f * (float)brokenArms;
+        }
+        lastX = human->position.x;
+        lastY = human->position.y;
+        lastZ = human->position.z;
+        exertionValid = true;
+        exertion = std::min(exertion * 0.985f, 3.0f);
+
         float pain = broken * 1.67f;
         pain += (1.0f - std::clamp(human->health, 0, 100) / 100.0f) * 3.0f;
         pain += acute;
+        pain += exertion;
         lastPain = std::clamp(pain, 0.0f, 10.0f);
+
+        if (immunity > 0.0f)
+            immunity -= 1.0f / 60.0f;
+
+        if (unconscious)
+        {
+            unconTimer -= 1.0f / 60.0f;
+            blackFade = std::min(blackFade + 1.0f / 60.0f / 0.35f, 1.0f);
+            if (unconTimer <= 0.0f)
+            {
+                unconscious = false;
+                immunity = 5.0f;
+                sustainTimer = 0.0f;
+                if (volumeDucked)
+                {
+                    SetSessionVolume(1.0f);
+                    volumeDucked = false;
+                }
+            }
+        }
+        else if (immunity <= 0.0f)
+        {
+            if (lastPain >= 9.5f)
+            {
+                sustainTimer += 1.0f / 60.0f;
+                if (sustainTimer >= 1.2f)
+                    GoUnconscious();
+            }
+            else
+                sustainTimer = 0.0f;
+
+            if (acute >= 0.5f)
+                GoUnconscious();
+        }
+
+        blackFade = unconscious ? blackFade
+                                : std::max(blackFade - 1.0f / 60.0f / 0.8f, 0.0f);
 #endif
+    }
+
+    int Uncon()
+    {
+        return unconscious ? 1 : 0;
+    }
+
+    float BlackFade()
+    {
+        return blackFade;
     }
 
     void Draw()
@@ -115,11 +251,14 @@ namespace painshader
 
         (void)intensity;
 
-        // the pain stat itself (user-visible in practice mode)
+        // stats, top-left
         char stat[64];
         std::snprintf(stat, sizeof(stat), "pain: %d", static_cast<int>(level + 0.5f));
-        api::QueueText(std::string(stat), 90.0f, 740.0f, 15.0f,
+        api::QueueText(std::string(stat), 16.0f, 24.0f, 15.0f,
                        glm::vec4(1.0f, 0.3f, 0.25f, 1.0f), api::TextAlignment::Left, true);
+        std::snprintf(stat, sizeof(stat), "uncon: %d", Uncon());
+        api::QueueText(std::string(stat), 16.0f, 46.0f, 15.0f,
+                       glm::vec4(0.7f, 0.7f, 0.75f, 1.0f), api::TextAlignment::Left, true);
 #endif
     }
 

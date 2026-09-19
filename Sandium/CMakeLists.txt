@@ -44,6 +44,7 @@ add_library(
     BrokenBones.cpp
     PainShader.cpp
     GrainShader.cpp
+    CameraFX.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp
