@@ -6,6 +6,7 @@
 #if _WIN32
 extern subhook::Hook *drawHUDHook;
 #include "../api/Billboards.hpp"
+#include "../BrokenBones.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -30,6 +31,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     api::freecam::Update();
     bettercrashes::Update();
+    brokenbones::Update();
     custommodels::UpdateAndDraw();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");

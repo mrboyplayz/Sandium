@@ -42,6 +42,8 @@ add_library(
     ServerMedia.cpp
     Roster.cpp
     Flags.cpp
+    BrokenBones.cpp
+    api/Sound.cpp
     TypeManager.cpp
     Version.cpp
 
