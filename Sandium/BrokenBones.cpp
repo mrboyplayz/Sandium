@@ -294,22 +294,6 @@ namespace brokenbones
                 continue;
             }
 
-            // Respawn detection: a big upward jump on any limb (0 -> 100)
-            // means the human was refilled -- broken bones never carry over.
-            for (int i = 0; i < 6; ++i)
-            {
-                if (*limbRefs[h][i].current - limbRefs[h][i].last >= 50)
-                {
-                    for (int j = 0; j < 6; ++j)
-                        brokenLimbs[h][j] = false;
-                    break;
-                }
-            }
-
-            // keep broken limbs at zero even through the game's health regen
-            for (int i = 0; i < 6; ++i)
-                if (brokenLimbs[h][i])
-                    *limbRefs[h][i].current = 0;
             int *limbs[6] = {&human.headHealth, &human.torsoHealth, &human.leftArmHealth,
                              &human.rightArmHealth, &human.leftLegHealth, &human.rightLegHealth};
 
@@ -320,6 +304,23 @@ namespace brokenbones
                 initialized[h] = true;
                 continue;
             }
+
+            // Respawn detection: a big upward jump on any limb (0 -> 100)
+            // means the human was refilled -- broken bones never carry over.
+            for (int i = 0; i < 6; ++i)
+            {
+                if (limbRefs[h][i].current && *limbRefs[h][i].current - limbRefs[h][i].last >= 50)
+                {
+                    for (int j = 0; j < 6; ++j)
+                        brokenLimbs[h][j] = false;
+                    break;
+                }
+            }
+
+            // keep broken limbs at zero even through the game's health regen
+            for (int i = 0; i < 6; ++i)
+                if (brokenLimbs[h][i] && limbRefs[h][i].current)
+                    *limbRefs[h][i].current = 0;
 
             for (int i = 0; i < 6; ++i)
             {
