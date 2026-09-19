@@ -38,8 +38,7 @@ namespace paperdoll
         // mapped to their health group)
         int dollHP[6] = {};
         int paperdollBoneSlot = 0;
-        float paperdollLastCx = 0.0f, paperdollLastCy = 0.0f;
-        bool paperdollHasCentroid = false;
+        float paperdollRootX = 0.0f, paperdollRootY = 0.0f;
         bool sdlKeysResolved = false;
         using SDLKeysFn = const unsigned char *(*)(const unsigned char *);
         SDLKeysFn sdlKeys = nullptr;
@@ -124,30 +123,32 @@ namespace paperdoll
             {
                 float* buffer = &At<float>(verticesRva);
 
-                // track the draw slot by capsule centroid (injury overlays
-                // share their bone's geometry and must not advance it)
-                float cx = 0.0f, cy = 0.0f;
-                for (int v = 0; v < count; ++v)
+                // Capsules far from the doll anchor are not bones (other
+                // meshes share this flush path) -- leave them alone.
                 {
-                    cx += buffer[v * 9];
-                    cy += buffer[v * 9 + 1];
+                    const float ex = buffer[9] - paperdollRootX;
+                    const float ey = buffer[10] - paperdollRootY;
+                    if (ex * ex + ey * ey > 280.0f * 280.0f)
+                    {
+                        originalFlush();
+                        return;
+                    }
                 }
-                cx /= count;
-                cy /= count;
-                if (!paperdollHasCentroid ||
-                    std::fabs(cx - paperdollLastCx) + std::fabs(cy - paperdollLastCy) > 6.0f)
+
+                // Deterministic slot tracking: every bone draws exactly one
+                // outline (128 line verts) before its fills, so the outline
+                // count IS the current bone slot. Injury overlays and the
+                // base fill belong to the last outlined bone.
+                if (outline)
                     ++paperdollBoneSlot;
-                paperdollLastCx = cx;
-                paperdollLastCy = cy;
-                paperdollHasCentroid = true;
 
                 // broken bone -> black: remap slot to skeleton bone id, then
                 // to its health group (3 head, 0-2 torso, 4-6 left arm,
                 // 7-9 right arm, 10-12 left leg, 13-15 right leg)
-                if (paperdollBoneSlot >= 0 && paperdollBoneSlot < 16)
+                if (paperdollBoneSlot >= 1 && paperdollBoneSlot <= 16)
                 {
                     const int boneId = static_cast<int>(At<std::uint32_t>(
-                        0x404A6C + 4ULL * (282486070 + 25ULL * paperdollBoneSlot)));
+                        0x404A6C + 4ULL * (282486070 + 25ULL * (paperdollBoneSlot - 1))));
                     if (boneId >= 0 && boneId < 16)
                     {
                         int group = -1;
@@ -249,8 +250,8 @@ namespace paperdoll
             dollHP[4] = addresses::Humans[human].leftLegHealth;
             dollHP[5] = addresses::Humans[human].rightLegHealth;
             paperdollBoneSlot = 0;
-            paperdollHasCentroid = false;
-            paperdollLastCx = paperdollLastCy = 0.0f;
+            paperdollRootX = x;
+            paperdollRootY = y;
 
             // Intercept flushes for this HUD element (shape rewriting and the
             // broken-bone tint), never the world or other UI.
