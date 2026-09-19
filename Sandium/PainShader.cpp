@@ -255,10 +255,10 @@ namespace painshader
         char stat[64];
         std::snprintf(stat, sizeof(stat), "pain: %d", static_cast<int>(level + 0.5f));
         api::QueueText(std::string(stat), 16.0f, 24.0f, 15.0f,
-                       glm::vec4(1.0f, 0.3f, 0.25f, 1.0f), api::TextAlignment::Left, true);
+                       glm::vec4(1.0f, 0.3f, 0.25f, 1.0f), api::TextAlignment::Right, true);
         std::snprintf(stat, sizeof(stat), "uncon: %d", Uncon());
         api::QueueText(std::string(stat), 16.0f, 46.0f, 15.0f,
-                       glm::vec4(0.7f, 0.7f, 0.75f, 1.0f), api::TextAlignment::Left, true);
+                       glm::vec4(0.7f, 0.7f, 0.75f, 1.0f), api::TextAlignment::Right, true);
 #endif
     }
 
