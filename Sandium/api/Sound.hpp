@@ -15,6 +15,10 @@ namespace api
 
         void Play(float volume = 1.0f);
 
+        // Live stereo gains for positional audio (updated while playing).
+        void SetGainLR(float left, float right);
+        void Stop();
+
     private:
         Sound() = default;
         struct Impl;

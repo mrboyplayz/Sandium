@@ -10,6 +10,8 @@ extern subhook::Hook *drawHUDHook;
 #include "../PainShader.hpp"
 #include "../CameraFX.hpp"
 #include "../GrainShader.hpp"
+#include "../RadioPlayer.hpp"
+#include "../CarRadioUI.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -33,12 +35,15 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     painshader::Update();
     camerafx::Update();
+    radioplayer::Update();
+    carradio::Update();
     bettercrashes::Update();
     brokenbones::Update();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();
     painshader::Draw();
+    carradio::Draw();
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
     addresses::DrawHUDFunc(a, b, c, d);

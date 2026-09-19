@@ -47,6 +47,8 @@ namespace api
         std::atomic<bool> audioRunning{false};
         std::atomic<bool> playing{false};
         std::atomic<float> volume{1.0f};
+        std::atomic<float> gainL{1.0f};
+        std::atomic<float> gainR{1.0f};
         std::atomic<bool> flushRequested{false};
         std::mutex audioMutex;
         std::vector<float> audioQueue;
@@ -187,9 +189,14 @@ namespace api
                         {
                             const std::lock_guard<std::mutex> lock(audioMutex);
                             const float vol = volume.load();
+                            const float gl_ = gainL.load(), gr_ = gainR.load();
                             const std::ptrdiff_t count = static_cast<std::ptrdiff_t>(writable) * audioChannels;
                             for (std::ptrdiff_t i = 0; i < count; ++i)
-                                output[i] = audioQueue[i] * vol;
+                            {
+                                const float g = (i % audioChannels) == 0 ? gl_
+                                                : ((i % audioChannels) == 1 ? gr_ : (gl_ + gr_) * 0.5f);
+                                output[i] = audioQueue[i] * vol * g;
+                            }
                             audioQueue.erase(audioQueue.begin(), audioQueue.begin() + count);
                         }
                         for (UINT32 i = static_cast<UINT32>(writable) * audioChannels; i < frames * audioChannels; ++i)
@@ -290,8 +297,22 @@ namespace api
     void Sound::Play(float volume)
     {
         impl->volume = volume;
+        impl->gainL = 1.0f;
+        impl->gainR = 1.0f;
         impl->flushRequested = true;
         impl->playing = true;
+    }
+
+    void Sound::SetGainLR(float left, float right)
+    {
+        impl->gainL = left;
+        impl->gainR = right;
+    }
+
+    void Sound::Stop()
+    {
+        impl->flushRequested = true;
+        impl->playing = false;
     }
 }
 #else
