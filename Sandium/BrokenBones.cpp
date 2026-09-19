@@ -8,6 +8,8 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
+#include <vector>
 
 #if _WIN32
 #include <Windows.h>
@@ -48,6 +50,95 @@ namespace brokenbones
         std::shared_ptr<api::Sound> crackSound;
         bool soundFailed = false;
         std::chrono::steady_clock::time_point lastCrack{};
+
+        // ---- bone drive records ----
+        // On human spawn the game creates 16 consecutive 0xF4-byte bone
+        // records (one per skeleton bone). Each holds a default drive
+        // strength of 0.00390625 at +0x70. Zeroing a record's strength for a
+        // broken bone removes the limb drive, letting it dangle.
+        struct RecordSet { std::uint32_t *base; };
+
+        bool MatchesRecord(const std::uint32_t *q)
+        {
+            return q[-1] == 1 && q[0] == 7 && q[27] == 0 &&
+                   *reinterpret_cast<const float *>(reinterpret_cast<const char *>(q) + 0x70) == 0.00390625f;
+        }
+
+        std::vector<RecordSet> FindRecordSets()
+        {
+            std::vector<RecordSet> sets;
+            const auto base = reinterpret_cast<std::uintptr_t>(addresses::Base.ptr);
+            SYSTEM_INFO info{};
+            GetSystemInfo(&info);
+            std::uintptr_t page = base + 0x404A6C;
+            const std::uintptr_t end = base + (1ULL << 31); // state array lives within 2GB of the module base
+            MEMORY_BASIC_INFORMATION mbi{};
+            while (page < end)
+            {
+                if (!VirtualQuery(reinterpret_cast<void *>(page), &mbi, sizeof(mbi)))
+                    break;
+                if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+                {
+                    auto p = reinterpret_cast<const std::uint32_t *>(mbi.BaseAddress);
+                    const auto regionEnd = reinterpret_cast<const std::uint32_t *>(
+                        reinterpret_cast<const char *>(mbi.BaseAddress) + mbi.RegionSize);
+                    while (p + 4 < regionEnd)
+                    {
+                        if (MatchesRecord(p))
+                        {
+                            bool fullSet = true;
+                            for (int slot = 1; slot < 16; ++slot)
+                                if (!MatchesRecord(reinterpret_cast<const std::uint32_t *>(
+                                        reinterpret_cast<const char *>(p) + 0xF4 * slot)))
+                                {
+                                    fullSet = false;
+                                    break;
+                                }
+                            if (fullSet)
+                            {
+                                sets.push_back({const_cast<std::uint32_t *>(p)});
+                                p += 16 * 0xF4 / 4;
+                                continue;
+                            }
+                        }
+                        ++p;
+                    }
+                }
+                page = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+            }
+            return sets;
+        }
+
+        void BreakBoneDrives(int limbGroup)
+        {
+            // skeleton bones per limb group (enum.body)
+            int bones[3];
+            int boneCount = 0;
+            switch (limbGroup)
+            {
+                case 0: bones[boneCount++] = 3; break;
+                case 1: bones[boneCount++] = 0; bones[boneCount++] = 1; bones[boneCount++] = 2; break;
+                case 2: bones[boneCount++] = 4; bones[boneCount++] = 5; bones[boneCount++] = 6; break;
+                case 3: bones[boneCount++] = 7; bones[boneCount++] = 8; bones[boneCount++] = 9; break;
+                case 4: bones[boneCount++] = 10; bones[boneCount++] = 11; bones[boneCount++] = 12; break;
+                case 5: bones[boneCount++] = 13; bones[boneCount++] = 14; bones[boneCount++] = 15; break;
+            }
+            if (!boneCount)
+                return;
+            for (const RecordSet &set : FindRecordSets())
+            {
+                for (int slot = 0; slot < 16; ++slot)
+                {
+                    for (int b = 0; b < boneCount; ++b)
+                    {
+                        if (slot == bones[b])
+                        {
+                            *reinterpret_cast<float *>(reinterpret_cast<char *>(set.base) + 0xF4 * slot + 0x70) = 0.0f;
+                        }
+                    }
+                }
+            }
+        }
 
         void PlayCrack()
         {
@@ -111,6 +202,18 @@ namespace brokenbones
                 continue;
             }
 
+            // Respawn detection: a big upward jump on any limb (0 -> 100)
+            // means the human was refilled -- broken bones never carry over.
+            for (int i = 0; i < 6; ++i)
+            {
+                if (*limbRefs[h][i].current - limbRefs[h][i].last >= 50)
+                {
+                    for (int j = 0; j < 6; ++j)
+                        brokenLimbs[h][j] = false;
+                    break;
+                }
+            }
+
             // keep broken limbs at zero even through the game's health regen
             for (int i = 0; i < 6; ++i)
                 if (brokenLimbs[h][i])
@@ -151,6 +254,7 @@ namespace brokenbones
                     *limbs[i] = 0; // broken: renders black (practice sticks, MP confirms via server)
                     brokenLimbs[h][i] = true;
                     PlayCrack();
+                    BreakBoneDrives(i);
                     ref.last = 0;
                     ref.windowMs = 0;
                     continue;
