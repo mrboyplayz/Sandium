@@ -93,6 +93,8 @@ plugin:addHook("HumanDamage", function(human, bone, damage)
     if not group then return end
     local field = GROUP_FIELDS[group + 1]
     if human[field] <= 0 then return end
+    -- 30% chance only: shots and falls should not always snap a limb
+    if math.random() > 0.3 then return end
     breakGroup(human, group)
     plugin:print("Broke a bone (bone " .. bone .. ", " .. field .. ") with " .. damage .. " damage")
 end)
