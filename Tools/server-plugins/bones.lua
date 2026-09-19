@@ -100,19 +100,32 @@ end)
 -- human references for the per-tick pin (cleared on delete)
 -- per-tick: keep broken limbs at zero (health regen guard) + straight legs
 plugin:addHook("Physics", function()
-    for key, human in pairs(humanRefs) do
-        local groups = broken[key]
-        if groups and human then
-            local anyLeg = false
-            for group, _ in pairs(groups) do
-                human[GROUP_FIELDS[group + 1]] = 0
-                if group == 4 or group == 5 then anyLeg = true end
-            end
-            if anyLeg then
-                human.movementState = 6
-            end
-        end
-    end
+	for key, human in pairs(humanRefs) do
+		local groups = broken[key]
+		if groups and human then
+			-- full-health limb = freshly spawned human (duel/round resets reuse
+			-- the same Human object) -- broken bones never carry over
+			local fresh = false
+			for group, _ in pairs(groups) do
+				if human[GROUP_FIELDS[group + 1]] >= 100 then
+					fresh = true
+				end
+			end
+			if fresh then
+				broken[key] = nil
+				humanRefs[key] = nil
+			else
+				local anyLeg = false
+				for group, _ in pairs(groups) do
+					human[GROUP_FIELDS[group + 1]] = 0
+					if group == 4 or group == 5 then anyLeg = true end
+				end
+				if anyLeg then
+					human.movementState = 6
+				end
+			end
+		end
+	end
 end)
 
 -- chat commands: 'break arm' / 'break leg' breaks the speaker's own limb
