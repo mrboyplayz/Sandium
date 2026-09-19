@@ -303,7 +303,7 @@ void LuaManager::Initialize()
 		if (!white || !white->IsValid())
 		{
 			white = api::Image::Load("sandium/models/white.png");
-			white->SetLayer(-10);
+			white->SetLayer(0); // foreground pass -- negative layers draw behind the world
 		}
 		white->Draw(x, y, w, h, r, g, b, a);
 	};
