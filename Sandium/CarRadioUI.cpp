@@ -196,8 +196,13 @@ namespace carradio
             }
             if (winW > 0 && winH > 0)
             {
-                mouseUiX = static_cast<float>(mx) / winW * 1024.0f;
-                mouseUiY = static_cast<float>(my) / winH * 768.0f;
+                // the UI is 4:3 (1024x768) letterboxed inside the window:
+                // scaled to fit the height, centered horizontally
+                const float scale = static_cast<float>(winH) / 768.0f;
+                const float uiWidth = 1024.0f * scale;
+                const float offsetX = (static_cast<float>(winW) - uiWidth) * 0.5f;
+                mouseUiX = (static_cast<float>(mx) - offsetX) / uiWidth * 1024.0f;
+                mouseUiY = static_cast<float>(my) / static_cast<float>(winH) * 768.0f;
             }
         }
 
