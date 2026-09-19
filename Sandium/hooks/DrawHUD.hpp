@@ -8,6 +8,7 @@ extern subhook::Hook *drawHUDHook;
 #include "../api/Billboards.hpp"
 #include "../BrokenBones.hpp"
 #include "../PainShader.hpp"
+#include "../GrainShader.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -42,5 +43,6 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     api::DrawItemBillboards();
     api::FlushImageLayer(true);
     api::FlushQueuedTexts(); // Lua UI text on top of the game's HUD
+    grainshader::Draw();     // decompiled Source film grain, pain-driven
 }
 #endif

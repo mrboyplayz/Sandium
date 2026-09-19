@@ -43,6 +43,7 @@ add_library(
     Flags.cpp
     BrokenBones.cpp
     PainShader.cpp
+    GrainShader.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp

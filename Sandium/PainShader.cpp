@@ -29,6 +29,7 @@ namespace painshader
         bool limbsValid = false;
         float acute = 0.0f;
         bool hadHuman = false;
+        float lastIntensity = 0.0f;
 
         const auto started = std::chrono::steady_clock::now();
 
@@ -152,6 +153,12 @@ namespace painshader
 
         api::QueueDraw(texture, 0.0f, 0.0f, 1024.0f, 768.0f,
                        1.0f, 0.12f, 0.12f, intensity, 1, 0.0f);
+        lastIntensity = std::clamp(chronic + acute, 0.0f, 1.0f);
 #endif
+    }
+
+    float Intensity()
+    {
+        return lastIntensity;
     }
 }

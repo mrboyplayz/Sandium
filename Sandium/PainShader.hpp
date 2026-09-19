@@ -8,4 +8,7 @@ namespace painshader
     // inside the HUD's Lua drawing window. Windows only.
     void Update();
     void Draw();
+
+    // Current pain level, 0 (healthy) .. ~1 (near death / just slammed).
+    float Intensity();
 }
