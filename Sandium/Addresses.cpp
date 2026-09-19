@@ -48,6 +48,10 @@ FuncAddress<addresses::DrawHUDFuncType> addresses::DrawHUDFunc;
 #endif
 FuncAddress<addresses::VoidFuncType> addresses::ConnectMasterServerFunc;
 FuncAddress<addresses::CreateItemFuncType> addresses::CreateItemFunc;
+FuncAddress<addresses::AttachItemFuncType> addresses::AttachItemFunc;
+FuncAddress<addresses::LoadCMOFuncType> addresses::LoadCMOFunc;
+FuncAddress<addresses::BindItemModelFuncType> addresses::BindItemModelFunc;
+FuncAddress<addresses::LoadTextureFuncType> addresses::LoadTextureFunc;
 FuncAddress<addresses::CreateVehicleFuncType> addresses::CreateVehicleFunc;
 FuncAddress<addresses::CSDrawAtlasEntryFuncType> addresses::CSDrawAtlasEntryFunc;
 FuncAddress<addresses::CSDrawTextFuncType> addresses::CSDrawTextFunc;
@@ -121,6 +125,10 @@ label_client: {}
 #endif
     addresses::ConnectMasterServerFunc.Register(baseAddress + DYNADDR(0xA3F30, 0x71447));
     addresses::CreateItemFunc.Register(baseAddress + DYNADDR(0x54130, 0xC5F2B));
+    addresses::AttachItemFunc.Register(baseAddress + DYNADDR(0xE35D0, 0x0));
+    addresses::LoadCMOFunc.Register(baseAddress + DYNADDR(0xE9A60, 0x0));
+    addresses::BindItemModelFunc.Register(baseAddress + DYNADDR(0x13FCD0, 0x0));
+    addresses::LoadTextureFunc.Register(baseAddress + DYNADDR(0xEDED0, 0x0));
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x5BCA0, 0xC92B0));
     addresses::CSDrawAtlasEntryFunc.Register(baseAddress + DYNADDR(0x6D300, 0x0));
     addresses::CSDrawTextFunc.Register(baseAddress + DYNADDR(0x6D930, 0x2C62C));
@@ -185,6 +193,10 @@ label_dedicated: {}
 #endif
     addresses::ConnectMasterServerFunc.Register(baseAddress + DYNADDR(0x4FEB0, 0x0));
     addresses::CreateItemFunc.Register(baseAddress + DYNADDR(0x3B080, 0x0));
+    addresses::AttachItemFunc.Register(0);
+    addresses::LoadCMOFunc.Register(0);
+    addresses::BindItemModelFunc.Register(0);
+    addresses::LoadTextureFunc.Register(0);
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x414B0, 0x0));
     addresses::CSDrawAtlasEntryFunc.Register(0);
     addresses::CSDrawTextFunc.Register(0);

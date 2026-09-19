@@ -61,7 +61,6 @@ void SetupItemTypesHookFunc()
     }
 
     GetMainLuaManager()->CallHooks("SetupItemTypes", "post");
-    custommodels::ConfigureRevolverType();
 }
 
 #endif

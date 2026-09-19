@@ -69,6 +69,16 @@ namespace addresses
     using CreateItemFuncType = int (int typeID, structs::CVector3 *position, structs::CVector3 *velocity, structs::COrientation *orientation);
     extern FuncAddress<CreateItemFuncType> CreateItemFunc;
 
+    using AttachItemFuncType = int (int itemID, int parentItemID, int humanID, int inventorySlotID);
+    extern FuncAddress<AttachItemFuncType> AttachItemFunc;
+
+    using LoadCMOFuncType = std::uint64_t (int modelResourceID, int textureOverrideID, const char *name);
+    extern FuncAddress<LoadCMOFuncType> LoadCMOFunc;
+    using BindItemModelFuncType = void (int itemTypeID, int modelResourceID);
+    extern FuncAddress<BindItemModelFuncType> BindItemModelFunc;
+    using LoadTextureFuncType = std::uint64_t (int textureResourceID, const char *path, int filtered, int format);
+    extern FuncAddress<LoadTextureFuncType> LoadTextureFunc;
+
     using CreateVehicleFuncType = int (int typeID, structs::CVector3 *position, structs::CVector3 *velocity, structs::COrientation *orientation, int colorID);
     extern FuncAddress<CreateVehicleFuncType> CreateVehicleFunc;
 

@@ -17,5 +17,11 @@ namespace api
         // Post-multiplies the camera delta onto composed MVP uploads so the
         // whole scene renders from the freecam position.
         bool ModelViewOverride(float *matrix16);
+
+        // True while the freecam is engaged (Camera or Parked).
+        bool IsActive();
+
+        // Camera world position and forward axis, if available.
+        bool GetCamera(float pos[3], float forward[3]);
     }
 }

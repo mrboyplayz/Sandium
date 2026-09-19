@@ -7,6 +7,7 @@
 extern subhook::Hook *drawHUDHook;
 #include "../api/Billboards.hpp"
 #include "../BrokenBones.hpp"
+#include "../PosMarker.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -30,12 +31,13 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
 {
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     api::freecam::Update();
+    posmarker::Update();
     bettercrashes::Update();
     brokenbones::Update();
-    custommodels::UpdateAndDraw();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();
+    posmarker::Draw();
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
     addresses::DrawHUDFunc(a, b, c, d);

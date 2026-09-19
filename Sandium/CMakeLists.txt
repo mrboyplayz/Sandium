@@ -43,6 +43,7 @@ add_library(
     Roster.cpp
     Flags.cpp
     BrokenBones.cpp
+    PosMarker.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp

@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstring>
 #include <chrono>
+#include <cstdio>
+#include <utility>
 
 #if _WIN32
 #include <Windows.h>
@@ -26,6 +28,7 @@ namespace api
             // frozen camera while Parked
             float frozenMatrix[16] = {};
             bool frozenTransposed = false;
+            bool hasFrozen = false;
             float frozenPosition[3] = {};
             bool frozenPositionValid = false;
             bool previousF10 = false;
@@ -57,6 +60,13 @@ namespace api
                 return sdlKeys ? sdlKeys(nullptr) : nullptr;
             }
 
+            void Transpose(float *m)
+            {
+                for (int i = 1; i < 4; ++i)
+                    for (int j = 0; j < i; ++j)
+                        std::swap(m[i * 4 + j], m[j * 4 + i]);
+            }
+
             // shift the view matrix translation so the camera sits delta further
             // along its own axes
             void ShiftView(float *m, bool transposed, const float delta[3])
@@ -81,6 +91,26 @@ namespace api
                     m[11] -= shift[2];
                 }
             }
+
+            void DumpDiagnostics()
+            {
+                const char nl = static_cast<char>(10);
+                (void)nl;
+                if (std::FILE *f = std::fopen("sandium_freecam.txt", "w"))
+                {
+                    std::fprintf(f, "mode=%d hasLastView=%d transposed=%d posValid=%d offset=(%.2f %.2f %.2f)\n",
+                                 static_cast<int>(mode), glcap::HasLastView() ? 1 : 0,
+                                 glcap::HasLastView() ? (glcap::LastViewTransposed() ? 1 : 0) : -1,
+                                 glcap::LastViewPositionValid() ? 1 : 0,
+                                 offset[0], offset[1], offset[2]);
+                    if (glcap::LastViewPositionValid())
+                    {
+                        const float *p = glcap::LastViewPosition();
+                        std::fprintf(f, "viewPos=(%.2f %.2f %.2f)\n", p[0], p[1], p[2]);
+                    }
+                    std::fclose(f);
+                }
+            }
         }
 #endif
 
@@ -100,6 +130,7 @@ namespace api
 
             if (f10Pressed)
             {
+                DumpDiagnostics();
                 if (mode == Mode::Camera && ctrl)
                 {
                     // freeze the camera where it is; the player moves normally again
@@ -119,6 +150,7 @@ namespace api
                             frozenPosition[2] = pos[2] + offset[2];
                             frozenPositionValid = true;
                         }
+                        hasFrozen = true;
                         mode = Mode::Parked;
                         return;
                     }
@@ -133,6 +165,7 @@ namespace api
                 else
                 {
                     mode = Mode::Off; // F10 again disables freecam
+                    hasFrozen = false;
                 }
             }
 
@@ -200,6 +233,53 @@ namespace api
 #endif
         }
 
+        bool IsActive()
+        {
+#if _WIN32
+            return mode != Mode::Off;
+#else
+            return false;
+#endif
+        }
+
+        bool GetCamera(float pos[3], float forward[3])
+        {
+#if _WIN32
+            if (mode == Mode::Off || !glcap::HasLastView())
+                return false;
+            const float *view = glcap::LastViewMatrix();
+            const bool t = glcap::LastViewTransposed();
+            if (t)
+            {
+                forward[0] = -view[2]; forward[1] = -view[6]; forward[2] = -view[10];
+            }
+            else
+            {
+                forward[0] = -view[8]; forward[1] = -view[9]; forward[2] = -view[10];
+            }
+            if (glcap::LastViewPositionValid())
+            {
+                const float *p = glcap::LastViewPosition();
+                pos[0] = p[0]; pos[1] = p[1]; pos[2] = p[2];
+            }
+            else
+            {
+                pos[0] = pos[1] = pos[2] = 0.0f;
+            }
+            if (mode == Mode::Camera)
+            {
+                pos[0] += offset[0]; pos[1] += offset[1]; pos[2] += offset[2];
+            }
+            else if (mode == Mode::Parked && frozenPositionValid)
+            {
+                pos[0] = frozenPosition[0]; pos[1] = frozenPosition[1]; pos[2] = frozenPosition[2];
+            }
+            return true;
+#else
+            return false;
+#endif
+        }
+
         bool ViewOverride(float *matrix, bool transposed)
         {
 #if _WIN32
@@ -208,7 +288,8 @@ namespace api
             if (mode == Mode::Parked)
             {
                 std::memcpy(matrix, frozenMatrix, sizeof(frozenMatrix));
-                (void)transposed; // the frozen matrix is stored in its own layout
+                if (hasFrozen && transposed != frozenTransposed)
+                    Transpose(matrix); // uploads may request the other layout
                 return true;
             }
             ShiftView(matrix, transposed, offset);
@@ -220,6 +301,7 @@ namespace api
 
         bool ModelViewOverride(float *m)
         {
+#if _WIN32
             if (mode == Mode::Off)
                 return false;
             const float *delta = nullptr;
@@ -242,6 +324,9 @@ namespace api
                     m[c * 4 + 3] -= m[c * 4] * delta[0] + m[c * 4 + 1] * delta[1] + m[c * 4 + 2] * delta[2];
             }
             return true;
+#else
+            return false;
+#endif
         }
 
         bool PositionOverride(float *xyz)

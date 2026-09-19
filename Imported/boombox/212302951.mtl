@@ -1,0 +1,4 @@
+# Exported from Nomad Sculpt
+
+newmtl Mesh
+ map_Kd boomboxmesh.png
