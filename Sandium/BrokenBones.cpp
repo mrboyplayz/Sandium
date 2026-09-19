@@ -67,12 +67,17 @@ namespace brokenbones
                    *reinterpret_cast<const float *>(reinterpret_cast<const char *>(q) + 0x70) == 0.00390625f;
         }
 
+        std::vector<RecordSet> cachedSets;
+        bool setsScanned = false;
+
         std::vector<RecordSet> FindRecordSets()
         {
+            if (setsScanned)
+                return cachedSets;
+            setsScanned = true;
+
             std::vector<RecordSet> sets;
             const auto base = reinterpret_cast<std::uintptr_t>(addresses::Base.ptr);
-            SYSTEM_INFO info{};
-            GetSystemInfo(&info);
             std::uintptr_t page = base + 0x404A6C;
             const std::uintptr_t end = base + (1ULL << 31); // state array lives within 2GB of the module base
             MEMORY_BASIC_INFORMATION mbi{};
@@ -80,7 +85,10 @@ namespace brokenbones
             {
                 if (!VirtualQuery(reinterpret_cast<void *>(page), &mbi, sizeof(mbi)))
                     break;
-                if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+                const bool readable = mbi.State == MEM_COMMIT &&
+                                      (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) &&
+                                      !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
+                if (readable)
                 {
                     auto p = reinterpret_cast<const std::uint32_t *>(mbi.BaseAddress);
                     const auto regionEnd = reinterpret_cast<const std::uint32_t *>(
@@ -109,7 +117,33 @@ namespace brokenbones
                 }
                 page = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
             }
-            return sets;
+
+            // belt and braces: a single bad page must never take the game down
+            // (SEH lives in its own function: __try forbids object unwinding)
+            for (const RecordSet &set : sets)
+                if (!ProbeRecordSet(set))
+                {
+                    cachedSets.clear();
+                    return cachedSets;
+                }
+            cachedSets = std::move(sets);
+            return cachedSets;
+        }
+
+        bool ProbeRecordSet(const RecordSet &set)
+        {
+            __try
+            {
+                volatile const std::uint32_t *probe = set.base;
+                (void)*probe;
+                (void)*reinterpret_cast<const volatile std::uint32_t *>(
+                    reinterpret_cast<const char *>(set.base) + 0xF4 * 15 + 0x70);
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
         }
 
         void BreakBoneDrives(int limbGroup)
