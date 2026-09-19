@@ -99,7 +99,7 @@ namespace radioplayer
         // positional gains from the car
         if (!current)
             return;
-        if (currentVehicle >= structs::Vehicle::VanillaCount ||
+        if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
             !addresses::Vehicles[currentVehicle].isActive.b1)
         {
             current->Stop();

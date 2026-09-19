@@ -1,15 +1,14 @@
 #include "CarRadioUI.hpp"
 
 #include "Addresses.hpp"
-#include "api/Image.hpp"
 #include "api/Text.hpp"
 #include "structs/Human.hpp"
 
 #include <glad/glad.h>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
-#include <vector>
 
 #if _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -19,22 +18,22 @@
 #undef DrawText
 #endif
 
+// In-car radio UI. All rects are drawn in REAL viewport pixels through a
+// tiny GL quad program, and text is queued in the game's 1024x768 text
+// space converted from the same real pixels, so the panel, box, typed text
+// and cursor always line up regardless of the window size.
+
 namespace carradio
 {
     namespace
     {
-        constexpr float PANEL_X = 672.0f, PANEL_Y = 208.0f;
-        constexpr float PANEL_W = 288.0f, PANEL_H = 92.0f;
-        constexpr float BOX_X = 768.0f, BOX_Y = 270.0f;
-        constexpr float BOX_W = 182.0f, BOX_H = 22.0f;
-
         constexpr unsigned char KEY_Y = 28;
         constexpr unsigned char KEY_BACKSPACE = 42;
         constexpr unsigned char KEY_RETURN = 40;
-        constexpr unsigned char KEY_ESCAPE = 41;
         constexpr unsigned char KEY_V = 25;
         constexpr unsigned char KEY_LCTRL = 224;
         constexpr unsigned char KEY_RCTRL = 228;
+        constexpr unsigned char KEY_LMB = 7;
 
         bool cursorFree = false;
         bool focused = false;
@@ -42,12 +41,10 @@ namespace carradio
         bool previousClick = false;
         bool previousV = false;
         bool previousBackspace = false;
+        bool previousEnter = false;
         char text[220] = {};
-        std::size_t textLen = 0;
-        float mouseUiX = -100.0f, mouseUiY = -100.0f;
+        int textLen = 0;
         float blinkTime = 0.0f;
-
-        using FnPtr = void *;
 
         template <typename T> T Sdl(const char *name)
         {
@@ -70,13 +67,15 @@ namespace carradio
             return fn ? fn(nullptr) : nullptr;
         }
 
-        bool InVehicle()
+        bool InVehicle(int &vehicleID)
         {
+            vehicleID = -1;
             for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
             {
                 if (!addresses::Humans[h].isActive.b1)
                     continue;
-                return addresses::Humans[h].vehicleID >= 0;
+                vehicleID = addresses::Humans[h].vehicleID;
+                return vehicleID >= 0;
             }
             return false;
         }
@@ -84,55 +83,140 @@ namespace carradio
         void SetCursorFree(bool free_)
         {
             cursorFree = free_;
+            focused = false;
             using SetRelFn = int (*)(int);
             using ShowCurFn = int (*)(int);
             if (auto setRel = Sdl<SetRelFn>("SDL_SetRelativeMouseMode"))
                 setRel(free_ ? 0 : 1);
             if (auto showCur = Sdl<ShowCurFn>("SDL_ShowCursor"))
                 showCur(free_ ? 1 : 0);
-            focused = false;
         }
 
-        void AppendText(const char *addition)
+        // ---- tiny GL quad pass in viewport pixels ----
+        GLuint quadProgram = 0;
+        GLuint quadVao = 0;
+        GLint quadRect = -1, quadColor = -1, quadRes = -1;
+        bool quadReady = false;
+        bool quadFailed = false;
+        unsigned int whiteTex = 0;
+
+        GLuint QuadCompile(GLenum type, const char *source)
         {
-            for (const char *p = addition; *p && textLen + 1 < sizeof(text); ++p)
-                if (*p >= 32 && *p != '\r' && *p != '\n')
-                    text[textLen++] = *p;
-            text[textLen] = 0;
+            GLuint shader = glCreateShader(type);
+            glShaderSource(shader, 1, &source, nullptr);
+            glCompileShader(shader);
+            GLint okay = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &okay);
+            if (!okay)
+            {
+                glDeleteShader(shader);
+                return 0;
+            }
+            return shader;
         }
 
-        void SendLink()
+        bool EnsureQuad()
+        {
+            if (quadReady)
+                return true;
+            if (quadFailed)
+                return false;
+            const char *vs = "#version 330 core\n"
+                             "uniform vec2 uRes;\n"
+                             "uniform vec4 uRect; // x y w h in pixels\n"
+                             "out vec2 vUv;\n"
+                             "void main(){\n"
+                             "  vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+                             "  vUv = corner;\n"
+                             "  vec2 pos = uRect.xy + corner * uRect.zw;\n"
+                             "  gl_Position = vec4(pos / uRes * 2.0 - 1.0, 0.0, 1.0);\n"
+                             "}\n";
+            const char *fs = "#version 330 core\n"
+                             "in vec2 vUv;\n"
+                             "uniform vec4 uColor;\n"
+                             "out vec4 color;\n"
+                             "void main(){ color = uColor; }\n";
+            GLuint v = QuadCompile(GL_VERTEX_SHADER, vs);
+            GLuint f = QuadCompile(GL_FRAGMENT_SHADER, fs);
+            if (!v || !f)
+            {
+                quadFailed = true;
+                return false;
+            }
+            quadProgram = glCreateProgram();
+            glAttachShader(quadProgram, v);
+            glAttachShader(quadProgram, f);
+            glLinkProgram(quadProgram);
+            glDeleteShader(v);
+            glDeleteShader(f);
+            GLint linked = 0;
+            glGetProgramiv(quadProgram, GL_LINK_STATUS, &linked);
+            if (!linked)
+            {
+                quadFailed = true;
+                return false;
+            }
+            quadRect = glGetUniformLocation(quadProgram, "uRect");
+            quadColor = glGetUniformLocation(quadProgram, "uColor");
+            quadRes = glGetUniformLocation(quadProgram, "uRes");
+            glGenVertexArrays(1, &quadVao);
+            glGenTextures(1, &whiteTex);
+            glBindTexture(GL_TEXTURE_2D, whiteTex);
+            const unsigned char pixel[4] = {255, 255, 255, 255};
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            quadReady = true;
+            return true;
+        }
+
+        int viewportWidth()
+        {
+            GLint v[4] = {};
+            glGetIntegerv(GL_VIEWPORT, v);
+            return v[2];
+        }
+
+        int viewportHeight()
+        {
+            GLint v[4] = {};
+            glGetIntegerv(GL_VIEWPORT, v);
+            return v[3];
+        }
+
+        // filled quad in viewport pixels (y from top)
+        void Quad(GLuint program, GLint res, GLint rectLoc, GLint colorLoc,
+                  float x, float y, float w, float h, float r, float g, float b, float a)
+        {
+            glUseProgram(program);
+            glUniform2f(res, static_cast<float>(viewportWidth()), static_cast<float>(viewportHeight()));
+            glUniform4f(rectLoc, x, y, w, h);
+            glUniform4f(colorLoc, r, g, b, a);
+            glBindVertexArray(quadVao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+        }
+
+        void SendLink(int vid)
         {
             if (textLen == 0)
                 return;
-            // local human's vehicle index
-            for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+            SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (sock == INVALID_SOCKET)
+                return;
+            DWORD timeout = 3000;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+            sockaddr_in addr {};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(28000);
+            addr.sin_addr.s_addr = inet_addr("185.227.111.150");
+            if (connect(sock, (sockaddr *)&addr, sizeof(addr)) == 0)
             {
-                if (!addresses::Humans[h].isActive.b1)
-                    continue;
-                const int vid = addresses::Humans[h].vehicleID;
-                if (vid < 0)
-                    return;
-
-                SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-                if (sock == INVALID_SOCKET)
-                    return;
-                DWORD timeout = 3000;
-                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-                setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
-                sockaddr_in addr{};
-                addr.sin_family = AF_INET;
-                addr.sin_port = htons(28000);
-                addr.sin_addr.s_addr = inet_addr("185.227.111.150");
-                if (connect(sock, (sockaddr *)&addr, sizeof(addr)) == 0)
-                {
-                    char packet[600];
-                    std::snprintf(packet, sizeof(packet), "radio %d %s", vid, text);
-                    send(sock, packet, (int)strlen(packet), 0);
-                }
-                closesocket(sock);
-                break;
+                char packet[600];
+                std::snprintf(packet, sizeof(packet), "radio %d %s", vid, text);
+                send(sock, packet, (int)strlen(packet), 0);
             }
+            closesocket(sock);
             textLen = 0;
             text[0] = 0;
             focused = false;
@@ -150,7 +234,8 @@ namespace carradio
             WSAStartup(MAKEWORD(2, 2), &wsa);
         }
 
-        const bool inCar = InVehicle();
+        int vid = -1;
+        const bool inCar = InVehicle(vid);
         if (!inCar && cursorFree)
             SetCursorFree(false);
         if (!inCar)
@@ -160,7 +245,10 @@ namespace carradio
         if (!keys)
             return;
 
-        // Y toggles the free cursor (unless typing in the box)
+        // while the free cursor is up, the game must not see Enter (chat)
+        if (cursorFree)
+            (*addresses::CSKeyboard.ptr)[KEY_RETURN] = false;
+
         const bool y = keys[KEY_Y] != 0;
         const bool yPressed = y && !previousY;
         previousY = y;
@@ -172,53 +260,63 @@ namespace carradio
         if (!cursorFree)
         {
             previousClick = false;
-            previousBackspace = keys[KEY_BACKSPACE] != 0;
-            previousV = keys[KEY_V] != 0;
+            previousBackspace = false;
+            previousV = false;
+            previousEnter = false;
             return;
         }
 
-        // mouse in UI space (the layer stretches the window to 1024x768)
-        using GetMouseFn = unsigned (*)(int *, int *);
-        if (auto getMouse = Sdl<GetMouseFn>("SDL_GetMouseState"))
+        // window size (real pixels) straight from SDL
+        using GetMouseFocusFn = void *(*)(void);
+        using WindowSizeFn = void (*)(void *, int *, int *);
+        int winW = 1024, winH = 768;
+        if (auto focus = Sdl<GetMouseFocusFn>("SDL_GetMouseFocus"))
         {
-            int mx = 0, my = 0;
-            getMouse(&mx, &my);
-            GLint viewport[4] = {};
-            glGetIntegerv(GL_VIEWPORT, viewport);
-            if (viewport[2] > 0 && viewport[3] > 0)
-            {
-                mouseUiX = static_cast<float>(mx) / viewport[2] * 1024.0f;
-                mouseUiY = static_cast<float>(my) / viewport[3] * 768.0f;
-            }
+            if (auto getSize = Sdl<WindowSizeFn>("SDL_GetWindowSize"))
+                getSize(focus, &winW, &winH);
+        }
+        if (winW <= 0 || winH <= 0)
+        {
+            winW = 1024;
+            winH = 768;
         }
 
-        // click handling: focus the box
-        const bool click = keys[7] != 0; // placeholder, replaced by mouse button below
-        (void)click;
+        using GetMouseFn = unsigned (*)(int *, int *);
+        auto getMouse = Sdl<GetMouseFn>("SDL_GetMouseState");
+        if (!getMouse)
+            return;
         int mx = 0, my = 0;
-        if (auto getMouse2 = Sdl<GetMouseFn>("SDL_GetMouseState"))
+        const unsigned buttons = getMouse(&mx, &my);
+        const float mouseRealX = static_cast<float>(mx);
+        const float mouseRealY = static_cast<float>(my);
+
+        // panel geometry in real pixels (above the gear selector)
+        const float px = winW * 0.515f;
+        const float py = winH * 0.395f;
+        const float pw = winW * 0.215f;
+        const float ph = winH * 0.135f;
+        const float bx = px + pw * 0.08f;
+        const float by = py + ph * 0.66f;
+        const float bw = pw * 0.84f;
+        const float bh = ph * 0.24f;
+
+        const bool click = (buttons & 1) != 0;
+        if (click && !previousClick)
         {
-            const unsigned buttons = getMouse2(nullptr, &my);
-            mx = (int)mouseUiX;
-            my = (int)mouseUiY;
-            const bool pressed = (buttons & 1) != 0;
-            if (pressed && !previousClick)
-            {
-                const bool inside = mouseUiX >= BOX_X && mouseUiX <= BOX_X + BOX_W &&
-                                    mouseUiY >= BOX_Y && mouseUiY <= BOX_Y + BOX_H;
-                focused = inside;
-            }
-            previousClick = pressed;
+            const bool inside = mouseRealX >= bx && mouseRealX <= bx + bw &&
+                                mouseRealY >= by && mouseRealY <= by + bh;
+            focused = inside;
         }
+        previousClick = click;
 
         if (!focused)
         {
             previousBackspace = keys[KEY_BACKSPACE] != 0;
             previousV = keys[KEY_V] != 0;
+            previousEnter = keys[KEY_RETURN] != 0;
             return;
         }
 
-        // Ctrl+V paste from clipboard
         const bool ctrl = keys[KEY_LCTRL] != 0 || keys[KEY_RCTRL] != 0;
         const bool v = keys[KEY_V] != 0;
         if (v && !previousV && ctrl)
@@ -230,7 +328,10 @@ namespace carradio
                 char *clip = getClip();
                 if (clip)
                 {
-                    AppendText(clip);
+                    for (const char *p = clip; *p && textLen + 1 < (int)sizeof(text); ++p)
+                        if (*p >= 32 && *p != '\r' && *p != '\n')
+                            text[textLen++] = *p;
+                    text[textLen] = 0;
                     if (auto freeMem = Sdl<FreeFn>("SDL_free"))
                         freeMem(clip);
                 }
@@ -238,24 +339,20 @@ namespace carradio
         }
         previousV = v;
 
-        // backspace
         const bool backspace = keys[KEY_BACKSPACE] != 0;
         if (backspace && !previousBackspace && textLen > 0)
             text[--textLen] = 0;
         previousBackspace = backspace;
 
-        // submit
         const bool enter = keys[KEY_RETURN] != 0;
-        static bool previousEnter = false;
         if (enter && !previousEnter)
         {
-            SendLink();
-            previousEnter = true;
+            SendLink(vid);
+            previousEnter = enter;
             return;
         }
         previousEnter = enter;
 
-        // typing: scancode -> key name
         using GetNameFn = const char *(*)(int);
         auto getName = Sdl<GetNameFn>("SDL_GetKeyName");
         using ModFn = unsigned (*)(void);
@@ -265,21 +362,19 @@ namespace carradio
         for (int sc = 4; sc < 116; ++sc)
         {
             const bool down = keys[sc] != 0;
-            if (!down || typed[sc])
-                continue;
-            if (!getName)
+            if (!down || typed[sc] || !getName)
                 continue;
             const char *name = getName(sc);
             if (!name || !name[0] || name[1])
-                continue; // single-character names only
+                continue;
             char c = name[0];
             if (c == ' ')
                 continue;
             if (!shift && c >= 'A' && c <= 'Z')
                 c = (char)(c - 'A' + 'a');
-            if (textLen + 1 < sizeof(text) && (isalnum((unsigned char)c) ||
-                c == '.' || c == '/' || c == ':' || c == '-' || c == '_' ||
-                c == '?' || c == '=' || c == '&'))
+            if (textLen + 1 < (int)sizeof(text) &&
+                (isalnum((unsigned char)c) || c == '.' || c == '/' || c == ':' ||
+                 c == '-' || c == '_' || c == '?' || c == '=' || c == '&'))
                 text[textLen++] = c;
             text[textLen] = 0;
         }
@@ -291,62 +386,111 @@ namespace carradio
     void Draw()
     {
 #if _WIN32
-        if (!InVehicle())
+        int vid = -1;
+        if (!InVehicle(vid))
+            return;
+        if (!EnsureQuad())
             return;
 
-        // panel background, same semi-tinted black as the gear UI
-        static unsigned int whiteTex = 0;
-        if (whiteTex == 0)
-        {
-            glGenTextures(1, &whiteTex);
-            glBindTexture(GL_TEXTURE_2D, whiteTex);
-            const unsigned char pixel[4] = {255, 255, 255, 255};
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        }
+        GLint viewport[4] = {};
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        if (viewport[2] <= 0 || viewport[3] <= 0)
+            return;
+        const float W = static_cast<float>(viewport[2]);
+        const float H = static_cast<float>(viewport[3]);
 
-        api::QueueDraw(whiteTex, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 0, 0, 0, 0.55f, 1, 0.0f);
+        GLint previousProgram = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+        GLint previousVao = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVao);
+        GLboolean previousBlend = glIsEnabled(GL_BLEND);
+        GLint previousSrc = 0, previousDst = 0;
+        glGetIntegerv(GL_BLEND_SRC_RGB, &previousSrc);
+        glGetIntegerv(GL_BLEND_DST_RGB, &previousDst);
 
-        api::QueueText(std::string("Radio"), PANEL_X + 8.0f, PANEL_Y + 6.0f, 20.0f,
-                       glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(quadProgram);
+        glUniform2f(quadRes, W, H);
+        glBindVertexArray(quadVao);
 
-        api::QueueText(std::string("youtube link"), PANEL_X + 8.0f, BOX_Y + 4.0f, 13.0f,
-                       glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+        // panel
+        const float px = W * 0.515f;
+        const float py = H * 0.395f;
+        const float pw = W * 0.215f;
+        const float ph = H * 0.135f;
+        const float bx = px + pw * 0.08f;
+        const float by = py + ph * 0.66f;
+        const float bw = pw * 0.84f;
+        const float bh = ph * 0.24f;
 
-        // box fill + white outline
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, BOX_H, 0, 0, 0, 0.6f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, 1.0f, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y + BOX_H - 1.0f, BOX_W, 1.0f, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, 1.0f, BOX_H, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X + BOX_W - 1.0f, BOX_Y, 1.0f, BOX_H, 1, 1, 1, 0.7f, 1, 0.0f);
+        glUniform4f(quadRect, px, py, pw, ph);
+        glUniform4f(quadColor, 0.0f, 0.0f, 0.0f, 0.55f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 
-        // typed text (or hint)
-        if (textLen > 0)
-        {
-            api::QueueText(std::string(text), BOX_X + 5.0f, BOX_Y + 4.0f, 13.0f,
-                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
-        }
+        // box fill + outline
+        glUniform4f(quadRect, bx, by, bw, bh);
+        glUniform4f(quadColor, 0.0f, 0.0f, 0.0f, 0.6f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUniform4f(quadColor, 1.0f, 1.0f, 1.0f, 0.7f);
+        glUniform4f(quadRect, bx, by, bw, 1.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUniform4f(quadRect, bx, by + bh - 1.0f, bw, 1.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUniform4f(quadRect, bx, by, 1.0f, bh);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glUniform4f(quadRect, bx + bw - 1.0f, by, 1.0f, bh);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+
+        glUseProgram(static_cast<GLuint>(previousProgram));
+        glBindVertexArray(static_cast<GLuint>(previousVao));
+        if (previousBlend)
+            glEnable(GL_BLEND);
         else
-        {
-            api::QueueText(std::string(focused ? "_" : ""), BOX_X + 5.0f, BOX_Y + 4.0f, 13.0f,
+            glDisable(GL_BLEND);
+        glBlendFunc(static_cast<GLenum>(previousSrc), static_cast<GLenum>(previousDst));
+
+        // text lives in the game's 1024x768 space; convert from real pixels
+        const auto toTextX = [&](float realX) { return realX / W * 1024.0f; };
+        const auto toTextY = [&](float realY) { return realY / H * 768.0f; };
+
+        api::QueueText(std::string("Radio"), toTextX(px + pw * 0.04f), toTextY(py + ph * 0.06f), 16.0f,
+                       glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+        api::QueueText(std::string("youtube link"), toTextX(px + pw * 0.04f), toTextY(by + bh * 0.18f), 11.0f,
+                       glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+
+        if (textLen > 0)
+            api::QueueText(std::string(text), toTextX(bx + 5.0f), toTextY(by + bh * 0.18f), 11.0f,
+                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+        else if (focused)
+            api::QueueText(std::string("_"), toTextX(bx + 5.0f), toTextY(by + bh * 0.18f), 11.0f,
                            glm::vec4(0.6f, 0.6f, 0.6f, 1.0f), api::TextAlignment::Right, true);
+
+        if (focused && (int)(blinkTime * 2.0f) % 2 == 0)
+            api::QueueText(std::string("|"), toTextX(bx + 6.0f + textLen * 5.5f), toTextY(by + bh * 0.18f), 11.0f,
+                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+
+        if (cursorFree)
+        {
+            // cursor drawn from the real mouse position via the same quad pass
+            using GetMouseFn = unsigned (*)(int *, int *);
+            if (auto getMouse = Sdl<GetMouseFn>("SDL_GetMouseState"))
+            {
+                int mx = 0, my = 0;
+                getMouse(&mx, &my);
+                glUseProgram(quadProgram);
+                glUniform2f(quadRes, W, H);
+                glUniform4f(quadRect, static_cast<float>(mx), static_cast<float>(my), 14.0f, 14.0f);
+                glUniform4f(quadColor, 1.0f, 1.0f, 1.0f, 0.9f);
+                glBindVertexArray(quadVao);
+                glBlendFunc(GL_ONE, GL_ONE);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
         }
 
-        // focus caret
-        if (focused && (int)(blinkTime * 2.0f) % 2 == 0)
-            api::QueueText(std::string("|"), BOX_X + 6.0f + textLen * 6.2f, BOX_Y + 4.0f, 13.0f,
-                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
-
-        // free cursor
-        if (cursorFree)
-            api::QueueText(std::string("+"), mouseUiX - 4.0f, mouseUiY - 6.0f, 14.0f,
-                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
-
-        // hint
-        api::QueueText(std::string(cursorFree ? "[Y] lock mouse  [Enter] play" : "[Y] radio cursor"),
-                       PANEL_X + 8.0f, PANEL_Y + PANEL_H - 22.0f, 11.0f,
-                       glm::vec4(0.7f, 0.7f, 0.7f, 1.0f), api::TextAlignment::Right, true);
+        api::QueueText(std::string(cursorFree ? "[Y] lock  [Enter] play" : "[Y] radio cursor"),
+                       toTextX(px + pw * 0.04f), toTextY(py + ph * 0.40f), 9.0f,
+                       glm::vec4(0.65f, 0.65f, 0.65f, 1.0f), api::TextAlignment::Right, true);
 #endif
     }
 }
