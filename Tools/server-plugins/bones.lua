@@ -39,6 +39,28 @@ end
 
 local GROUP_FIELDS = { "headHP", "chestHP", "leftArmHP", "rightArmHP", "leftLegHP", "rightLegHP" }
 
+-- crack event log: clients poll /stream/events.txt and play the sound with
+-- distance volume, so everyone near the break hears it
+local eventSeq = 0
+local eventsFile = "/opt/subrosa/stream/events.txt"
+
+local function logCrackEvent(human)
+    eventSeq = eventSeq + 1
+    local pos = human.pos
+    local line
+    if pos then
+        line = string.format("crack %d %.2f %.2f %.2f", eventSeq, pos.x, pos.y, pos.z)
+    else
+        line = string.format("crack %d 0 0 0", eventSeq)
+    end
+    local f = io.open(eventsFile, "a")
+    if f then
+        f:write(line .. "
+")
+        f:close()
+    end
+end
+
 -- broken[humanKey][groupIndex] = true
 local broken = {}
 
@@ -57,6 +79,7 @@ local function breakGroup(human, group)
     broken[key][group] = true
     humanRefs[key] = human
     human[GROUP_FIELDS[group + 1]] = 0
+    logCrackEvent(human)
     if group == 4 or group == 5 then
         human.movementState = 6 -- straight legs: very weak movement
     end

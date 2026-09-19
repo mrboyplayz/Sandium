@@ -46,6 +46,7 @@ namespace api
         std::thread audioThread;
         std::atomic<bool> audioRunning{false};
         std::atomic<bool> playing{false};
+        std::atomic<float> volume{1.0f};
         std::atomic<bool> flushRequested{false};
         std::mutex audioMutex;
         std::vector<float> audioQueue;
@@ -185,11 +186,11 @@ namespace api
                         if (writable > 0)
                         {
                             const std::lock_guard<std::mutex> lock(audioMutex);
-                            std::copy(audioQueue.begin(),
-                                      audioQueue.begin() + static_cast<std::ptrdiff_t>(writable) * audioChannels,
-                                      output);
-                            audioQueue.erase(audioQueue.begin(),
-                                             audioQueue.begin() + static_cast<std::ptrdiff_t>(writable) * audioChannels);
+                            const float vol = volume.load();
+                            const std::ptrdiff_t count = static_cast<std::ptrdiff_t>(writable) * audioChannels;
+                            for (std::ptrdiff_t i = 0; i < count; ++i)
+                                output[i] = audioQueue[i] * vol;
+                            audioQueue.erase(audioQueue.begin(), audioQueue.begin() + count);
                         }
                         for (UINT32 i = static_cast<UINT32>(writable) * audioChannels; i < frames * audioChannels; ++i)
                             output[i] = 0.0f;
@@ -286,8 +287,9 @@ namespace api
 
     Sound::~Sound() = default;
 
-    void Sound::Play()
+    void Sound::Play(float volume)
     {
+        impl->volume = volume;
         impl->flushRequested = true;
         impl->playing = true;
     }

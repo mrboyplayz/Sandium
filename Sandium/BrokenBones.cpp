@@ -1,6 +1,7 @@
 #include "BrokenBones.hpp"
 
 #include "api/Sound.hpp"
+#include "api/Http.hpp"
 
 #include "Addresses.hpp"
 #include "ServerMedia.hpp"
@@ -12,6 +13,8 @@
 #include <cstring>
 #include <cctype>
 #include <cstdlib>
+#include <cmath>
+#include <thread>
 #include <vector>
 
 #if _WIN32
@@ -68,6 +71,83 @@ namespace brokenbones
         }
 
         bool ProbeRecordSet(const RecordSet &set);
+
+        // ---- server event channel ----
+        // The Bones plugin appends "crack <id> <x> <y> <z>" to
+        // /stream/events.txt on every break; clients poll it (1s) and play
+        // the crack with volume by distance, so everyone hears breaks.
+        std::atomic<long long> lastEventId{0};
+        std::atomic<bool> eventsStarted{false};
+
+        void PlayCrack(float volume);
+        void PlayCrackForEvent(float x, float y, float z)
+        {
+            for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+            {
+                if (!addresses::Humans[h].isActive.b1)
+                    continue;
+                const float dx = addresses::Humans[h].position.x - x;
+                const float dy = addresses::Humans[h].position.y - y;
+                const float dz = addresses::Humans[h].position.z - z;
+                const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+                float volume = 1.0f - dist / 40.0f; // audible within 40 world units
+                if (volume <= 0.0f)
+                    return;
+                if (volume > 1.0f)
+                    volume = 1.0f;
+                PlayCrack(volume);
+                return;
+            }
+        }
+
+        void EventsThreadProc()
+        {
+            for (;;)
+            {
+                const std::string body = http::Get("185.227.111.150", 80,
+                                                   "/stream/events.txt", 3000,
+                                                   "SANDIUM_MASTER");
+                if (!body.empty())
+                {
+                    std::string line;
+                    auto take = [&](std::string &l)
+                    {
+                        if (l.rfind("crack ", 0) == 0)
+                        {
+                            long long id = 0;
+                            float x = 0, y = 0, z = 0;
+                            if (std::sscanf(l.c_str(), "crack %lld %f %f %f", &id, &x, &y, &z) == 4 &&
+                                id > lastEventId.load())
+                            {
+                                lastEventId = id;
+                                PlayCrackForEvent(x, y, z);
+                            }
+                        }
+                        l.clear();
+                    };
+                    for (char c : body)
+                    {
+                        if (c == '\n' || c == '\r')
+                        {
+                            if (!line.empty())
+                                take(line);
+                        }
+                        else
+                            line += c;
+                    }
+                    if (!line.empty())
+                        take(line);
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+
+        void StartEvents()
+        {
+            if (eventsStarted.exchange(true))
+                return;
+            std::thread(EventsThreadProc).detach();
+        }
         std::vector<RecordSet> cachedSets;
         bool setsScanned = false;
 
@@ -178,7 +258,7 @@ namespace brokenbones
             }
         }
 
-        void PlayCrack()
+        void PlayCrack(float volume = 1.0f)
         {
             const auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastCrack).count() < SOUND_COOLDOWN_MS)
@@ -202,7 +282,7 @@ namespace brokenbones
             }
             if (crackSound)
             {
-                crackSound->Play();
+                crackSound->Play(volume);
                 lastCrack = now;
             }
         }
@@ -263,6 +343,7 @@ namespace brokenbones
 
     void Update()
     {
+        StartEvents();
         CheckChatCommands();
         // periodic ground-truth dump of the local human's limb HP
         if (++diagFrames % 120 == 0)
@@ -328,6 +409,16 @@ namespace brokenbones
             if (brokenLimbs[h][4] || brokenLimbs[h][5])
                 human.movementStateID = 6;
 
+            // in multiplayer the sound arrives via the server event channel;
+            // the instant detector covers practice mode (first active human)
+            bool isFirstActive = true;
+            for (std::size_t k = 0; k < h; ++k)
+                if (addresses::Humans[k].isActive.b1)
+                {
+                    isFirstActive = false;
+                    break;
+                }
+
             for (int i = 0; i < 6; ++i)
             {
                 if (brokenLimbs[h][i])
@@ -352,7 +443,8 @@ namespace brokenbones
                 {
                     *limbs[i] = 0; // broken: renders black (practice sticks, MP confirms via server)
                     brokenLimbs[h][i] = true;
-                    PlayCrack();
+                    if (isFirstActive)
+                        PlayCrack();
                     BreakBoneDrives(i);
                     ref.last = 0;
                     ref.windowMs = 0;

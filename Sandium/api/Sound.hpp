@@ -13,7 +13,7 @@ namespace api
         static std::shared_ptr<Sound> Load(const std::string &path);
         ~Sound();
 
-        void Play();
+        void Play(float volume = 1.0f);
 
     private:
         Sound() = default;
