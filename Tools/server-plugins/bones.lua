@@ -55,8 +55,7 @@ local function logCrackEvent(human)
     end
     local f = io.open(eventsFile, "a")
     if f then
-        f:write(line .. "
-")
+        f:write(line .. "\n")
         f:close()
     end
 end
