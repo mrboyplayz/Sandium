@@ -18,6 +18,8 @@ public:
 	bool HasID(const std::string &addonID, const std::string &entryName) const;
 	std::size_t GetID(const std::string &addonID, const std::string &entryName) const;
 	std::size_t NewID(const std::string &addonID, const std::string &entryName);
+	void RegisterID(const std::string &addonID, const std::string &entryName, std::size_t id);
+	std::size_t GetNextID() const;
 
 	void Clear();
 };

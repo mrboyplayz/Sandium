@@ -35,12 +35,14 @@ int DrawMenuHookFunc(int unk);
 #include "../api/GLUniforms.hpp"
 #include "../Phone.hpp"
 #include "../ServerMedia.hpp"
+#include "../RadioPlayer.hpp"
 
 subhook::Hook *drawMenuHook;
 
 int DrawMenuHookFunc(int unk)
 {
     subhook::ScopedHookRemove scopedRemove(drawMenuHook);
+    radioplayer::StopSession();
 
     static bool directJoinInited = false;
     if (!directJoinInited)

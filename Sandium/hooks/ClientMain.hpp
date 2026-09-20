@@ -102,6 +102,8 @@ void ClientMainHookFunc()
     }
 
     // We gotta setup the structs!
+    // The native definitions must finish initializing before their table can
+    // be relocated. SetupItemTypesHook allocates metadata for expanded slots.
     for (std::size_t itemTypeCount = 0; itemTypeCount < structs::ItemType::VanillaCount; itemTypeCount++)
     {
         addresses::ItemTypes[itemTypeCount].customData.index = itemTypeCount;

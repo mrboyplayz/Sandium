@@ -37,6 +37,19 @@ std::size_t TypeManager::NewID(const std::string &addonID, const std::string &en
 	return this->_currentID - 1;
 }
 
+void TypeManager::RegisterID(const std::string &addonID, const std::string &entryName, std::size_t id)
+{
+	if (this->HasID(addonID, entryName))
+		throw std::logic_error("Entry was already registered");
+	this->_registry[addonID][entryName] = id;
+	this->_currentID = std::max(this->_currentID, id + 1);
+}
+
+std::size_t TypeManager::GetNextID() const
+{
+	return this->_currentID;
+}
+
 void TypeManager::Clear()
 {
 	this->_registry.clear();

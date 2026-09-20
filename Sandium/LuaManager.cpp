@@ -446,7 +446,10 @@ void LuaManager::DefineGameTypes()
 		"GetAll", [](const sol::this_state &state)
 		{
 			sol::table table = sol::table::create(state.L);
-			for (std::size_t itemTypeCount = 0; itemTypeCount < structs::ItemType::VanillaCount; itemTypeCount++)
+			const std::size_t itemTypeLimit = *addresses::IsDedicated
+				? structs::ItemType::VanillaCount
+				: structs::ItemType::ExpandedCount;
+			for (std::size_t itemTypeCount = 0; itemTypeCount < itemTypeLimit; itemTypeCount++)
 				table[itemTypeCount + 1] = &addresses::ItemTypes[itemTypeCount];
 			return table;
 		},
@@ -454,6 +457,27 @@ void LuaManager::DefineGameTypes()
 		{
 			std::pair<std::string, std::string> decomposed = DecomposeTypeID(typeID);
 			return &addresses::ItemTypes[GetItemTypeManager()->GetID(decomposed.first, decomposed.second)];
+		},
+		"Register", [](const std::string &typeID, const structs::ItemType &baseType)
+		{
+			if (*addresses::IsDedicated)
+				throw std::runtime_error("Expanded item types are not available in the dedicated server build yet");
+			const auto decomposed = DecomposeTypeID(typeID);
+			auto *manager = GetItemTypeManager();
+			if (manager->HasID(decomposed.first, decomposed.second))
+				throw std::logic_error("Item type is already registered: " + typeID);
+			const std::size_t index = manager->GetNextID();
+			if (index >= structs::ItemType::ExpandedCount)
+				throw std::runtime_error("Expanded item type table is full (maximum ID is 63)");
+
+			auto &definition = addresses::ItemTypes[index];
+			auto *typeIDStorage = definition.customData.typeIDPtr;
+			definition = baseType;
+			definition.customData.index = static_cast<int>(index);
+			definition.customData.typeIDPtr = typeIDStorage;
+			*typeIDStorage = typeID;
+			manager->RegisterID(decomposed.first, decomposed.second, index);
+			return &definition;
 		}
 	);
 

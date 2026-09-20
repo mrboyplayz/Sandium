@@ -23,10 +23,10 @@ namespace carradio
 {
     namespace
     {
-        constexpr float PANEL_X = 712.0f, PANEL_Y = 214.0f;
-        constexpr float PANEL_W = 200.0f, PANEL_H = 64.0f;
-        constexpr float BOX_X = 762.0f, BOX_Y = 248.0f;
-        constexpr float BOX_W = 140.0f, BOX_H = 18.0f;
+        constexpr float PANEL_X = 700.0f, PANEL_Y = 208.0f;
+        constexpr float PANEL_W = 218.0f, PANEL_H = 88.0f;
+        constexpr float BOX_X = 712.0f, BOX_Y = 246.0f;
+        constexpr float BOX_W = 194.0f, BOX_H = 20.0f;
 
         constexpr unsigned char KEY_Y = 28;
         constexpr unsigned char KEY_BACKSPACE = 42;
@@ -44,7 +44,6 @@ namespace carradio
         bool previousBackspace = false;
         char text[220] = {};
         std::size_t textLen = 0;
-        float mouseUiX = -100.0f, mouseUiY = -100.0f;
         float blinkTime = 0.0f;
 
         using FnPtr = void *;
@@ -90,7 +89,10 @@ namespace carradio
                 setRel(free_ ? 0 : 1);
             if (auto showCur = Sdl<ShowCurFn>("SDL_ShowCursor"))
                 showCur(free_ ? 1 : 0);
-            focused = false;
+            // The link field is the panel's only control, so opening the radio
+            // focuses it immediately. This also makes Ctrl+V work without a
+            // resolution-dependent click hit test.
+            focused = free_;
         }
 
         void AppendText(const char *addition)
@@ -160,12 +162,16 @@ namespace carradio
         if (!keys)
             return;
 
-        // Y toggles the free cursor (unless typing in the box)
+        // Y opens or closes the complete radio panel.
         const bool y = keys[KEY_Y] != 0;
         const bool yPressed = y && !previousY;
         previousY = y;
-        if (yPressed && !focused)
+        if (yPressed)
+        {
             SetCursorFree(!cursorFree);
+            previousClick = false;
+            return;
+        }
 
         blinkTime += 1.0f / 60.0f;
 
@@ -180,48 +186,15 @@ namespace carradio
             return;
         }
 
-        // mouse in UI space (the layer stretches the window to 1024x768)
+        // This panel has one interactive control. Any click while it is open
+        // focuses the link field, avoiding renderer-specific HUD scaling.
         using GetMouseFn = unsigned (*)(int *, int *);
-        using GetMouseFocusFn = void *(*)(void);
-        using WindowSizeFn = void (*)(void *, int *, int *);
         if (auto getMouse = Sdl<GetMouseFn>("SDL_GetMouseState"))
         {
-            int mx = 0, my = 0;
-            getMouse(&mx, &my);
-            int winW = 1024, winH = 768;
-            if (auto focus = Sdl<GetMouseFocusFn>("SDL_GetMouseFocus"))
-            {
-                if (auto getSize = Sdl<WindowSizeFn>("SDL_GetWindowSize"))
-                    getSize(focus, &winW, &winH);
-            }
-            if (winW > 0 && winH > 0)
-            {
-                // the UI is 4:3 (1024x768) letterboxed inside the window:
-                // scaled to fit the height, centered horizontally
-                const float scale = static_cast<float>(winH) / 768.0f;
-                const float uiWidth = 1024.0f * scale;
-                const float offsetX = (static_cast<float>(winW) - uiWidth) * 0.5f;
-                mouseUiX = (static_cast<float>(mx) - offsetX) / uiWidth * 1024.0f;
-                mouseUiY = static_cast<float>(my) / static_cast<float>(winH) * 768.0f;
-            }
-        }
-
-        // click handling: focus the box
-        const bool click = keys[7] != 0; // placeholder, replaced by mouse button below
-        (void)click;
-        int mx = 0, my = 0;
-        if (auto getMouse2 = Sdl<GetMouseFn>("SDL_GetMouseState"))
-        {
-            const unsigned buttons = getMouse2(nullptr, &my);
-            mx = (int)mouseUiX;
-            my = (int)mouseUiY;
+            const unsigned buttons = getMouse(nullptr, nullptr);
             const bool pressed = (buttons & 1) != 0;
             if (pressed && !previousClick)
-            {
-                const bool inside = mouseUiX >= BOX_X && mouseUiX <= BOX_X + BOX_W &&
-                                    mouseUiY >= BOX_Y && mouseUiY <= BOX_Y + BOX_H;
-                focused = inside;
-            }
+                focused = true;
             previousClick = pressed;
         }
 
@@ -308,7 +281,14 @@ namespace carradio
         if (!InVehicle())
             return;
 
-        // panel background, same semi-tinted black as the gear UI
+        if (!cursorFree)
+        {
+            api::QueueText(std::string("Open radio [Y]"), PANEL_X + 12.0f, 430.0f, 10.0f,
+                           glm::vec4(0.75f, 0.8f, 0.82f, 1.0f), api::TextAlignment::Right, true);
+            return;
+        }
+
+        // Panel background, matching the compact dark vehicle UI.
         static unsigned int whiteTex = 0;
         if (whiteTex == 0)
         {
@@ -320,47 +300,51 @@ namespace carradio
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
         }
 
-        api::QueueDraw(whiteTex, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 0, 0, 0, 0.55f, 1, 0.0f);
+        api::QueueDraw(whiteTex, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, 0.015f, 0.02f, 0.025f, 0.82f, 1, 0.0f);
 
-        api::QueueText(std::string("Radio"), PANEL_X + 6.0f, PANEL_Y + 4.0f, 14.0f,
+        api::QueueText(std::string("CAR RADIO"), PANEL_X + 12.0f, PANEL_Y + 7.0f, 13.0f,
                        glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
 
-        api::QueueText(std::string("youtube link"), PANEL_X + 6.0f, BOX_Y + 3.0f, 10.0f,
-                       glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
+        api::QueueText(std::string("YouTube link"), BOX_X, BOX_Y - 10.0f, 8.0f,
+                       glm::vec4(0.72f, 0.78f, 0.8f, 1.0f), api::TextAlignment::Right, true);
 
-        // box fill + white outline
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, BOX_H, 0, 0, 0, 0.6f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, 1.0f, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y + BOX_H - 1.0f, BOX_W, 1.0f, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X, BOX_Y, 1.0f, BOX_H, 1, 1, 1, 0.7f, 1, 0.0f);
-        api::QueueDraw(whiteTex, BOX_X + BOX_W - 1.0f, BOX_Y, 1.0f, BOX_H, 1, 1, 1, 0.7f, 1, 0.0f);
+        // Input fill and a brighter border while focused.
+        const float borderR = focused ? 0.15f : 0.55f;
+        const float borderG = focused ? 0.85f : 0.58f;
+        const float borderB = focused ? 0.9f : 0.6f;
+        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, BOX_H, 0, 0, 0, 0.72f, 1, 0.0f);
+        api::QueueDraw(whiteTex, BOX_X, BOX_Y, BOX_W, 1.0f, borderR, borderG, borderB, 0.9f, 2, 0.0f);
+        api::QueueDraw(whiteTex, BOX_X, BOX_Y + BOX_H - 1.0f, BOX_W, 1.0f, borderR, borderG, borderB, 0.9f, 2, 0.0f);
+        api::QueueDraw(whiteTex, BOX_X, BOX_Y, 1.0f, BOX_H, borderR, borderG, borderB, 0.9f, 2, 0.0f);
+        api::QueueDraw(whiteTex, BOX_X + BOX_W - 1.0f, BOX_Y, 1.0f, BOX_H, borderR, borderG, borderB, 0.9f, 2, 0.0f);
 
-        // typed text (or hint)
+        // Keep the end of long URLs visible inside the field.
+        std::string visibleText(text);
+        constexpr std::size_t maxVisibleCharacters = 34;
+        if (visibleText.size() > maxVisibleCharacters)
+            visibleText = "..." + visibleText.substr(visibleText.size() - (maxVisibleCharacters - 3));
+
         if (textLen > 0)
         {
-            api::QueueText(std::string(text), BOX_X + 4.0f, BOX_Y + 3.0f, 10.0f,
+            api::QueueText(visibleText, BOX_X + 5.0f, BOX_Y + 4.0f, 9.0f,
                            glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
         }
         else
         {
-            api::QueueText(std::string(focused ? "_" : ""), BOX_X + 4.0f, BOX_Y + 3.0f, 10.0f,
-                           glm::vec4(0.6f, 0.6f, 0.6f, 1.0f), api::TextAlignment::Right, true);
+            api::QueueText(std::string("paste or type a link"), BOX_X + 5.0f, BOX_Y + 4.0f, 9.0f,
+                           glm::vec4(0.42f, 0.46f, 0.48f, 1.0f), api::TextAlignment::Right, true);
         }
 
         // focus caret
         if (focused && (int)(blinkTime * 2.0f) % 2 == 0)
-            api::QueueText(std::string("|"), BOX_X + 4.0f + textLen * 4.8f, BOX_Y + 3.0f, 10.0f,
+            api::QueueText(std::string("|"), BOX_X + 5.0f + visibleText.size() * 4.35f, BOX_Y + 4.0f, 9.0f,
                            glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
 
-        // free cursor
-        if (cursorFree)
-            api::QueueText(std::string("+"), mouseUiX - 4.0f, mouseUiY - 6.0f, 14.0f,
-                           glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
-
-        // hint
-        api::QueueText(std::string(cursorFree ? "[Y] lock  [Enter] play" : "[Y] radio cursor"),
-                       PANEL_X + 6.0f, PANEL_Y + PANEL_H - 16.0f, 8.0f,
-                       glm::vec4(0.7f, 0.7f, 0.7f, 1.0f), api::TextAlignment::Right, true);
+        // The native SDL cursor is used while unlocked. Drawing a second text
+        // cursor here made it visibly lag and disagree with the click position.
+        api::QueueText(std::string("[Y] close radio     [Enter] play"),
+                       PANEL_X + 12.0f, PANEL_Y + 70.0f, 8.0f,
+                       glm::vec4(0.62f, 0.68f, 0.7f, 1.0f), api::TextAlignment::Right, true);
 #endif
     }
 }

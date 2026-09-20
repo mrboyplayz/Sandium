@@ -14,6 +14,7 @@ namespace structs
     struct ItemType
     {
         static constexpr std::size_t VanillaCount = 46;
+        static constexpr std::size_t ExpandedCount = 64;
 
         struct CustomData
         {

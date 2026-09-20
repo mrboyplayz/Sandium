@@ -1,5 +1,7 @@
 #include "ItemType.hpp"
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 
 namespace structs
@@ -10,7 +12,8 @@ namespace structs
     }
     void ItemType::SetName(const std::string &right)
     {
-        right.copy(this->name, sizeof(this->name));
+        std::memset(this->name, 0, sizeof(this->name));
+        right.copy(this->name, std::min(right.size(), sizeof(this->name) - 1));
     }
 
     int ItemType::GetIndex() const

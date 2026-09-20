@@ -17,6 +17,7 @@ namespace camerafx
 {
     namespace
     {
+        constexpr bool PAIN_CAMERA_EFFECTS_ENABLED = false;
         const auto started = std::chrono::steady_clock::now();
 
         void ShiftView(float *m, bool transposed, const float delta[3])
@@ -50,6 +51,8 @@ namespace camerafx
     bool ViewOverride(float *matrix, bool transposed)
     {
 #if _WIN32
+        if (!PAIN_CAMERA_EFFECTS_ENABLED)
+            return false;
         const float pain01 = painshader::Intensity();
         const float amplitude = std::clamp((pain01 - 0.6f) / 0.4f, 0.0f, 1.0f) * 0.045f;
         if (amplitude <= 0.0f || !api::glcap::HasLastView())
@@ -88,6 +91,8 @@ namespace camerafx
     float BlurAmount()
     {
 #if _WIN32
+        if (!PAIN_CAMERA_EFFECTS_ENABLED)
+            return 0.0f;
         const float pain01 = painshader::Intensity();
         return std::clamp((pain01 - 0.7f) / 0.3f, 0.0f, 1.0f);
 #else

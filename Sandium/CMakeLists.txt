@@ -34,6 +34,7 @@ add_library(
     DirectJoin.cpp
     Hooks.cpp
     Hotfixes.cpp
+    ItemTypeExpansion.cpp
     LuaManager.cpp
     Paperdoll.cpp
     Phone.cpp

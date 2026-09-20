@@ -8,4 +8,5 @@ namespace radioplayer
     // and stereo pan follow the listener camera, so the music comes FROM
     // the car. Call Update() once per frame. Windows only.
     void Update();
+    void StopSession();
 }

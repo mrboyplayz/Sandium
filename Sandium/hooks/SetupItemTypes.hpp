@@ -19,6 +19,7 @@ void SetupItemTypesHookFunc();
 #include "../structs/ItemType.hpp"
 #include "../TypeManager.hpp"
 #include "../CustomModels.hpp"
+#include "../ItemTypeExpansion.hpp"
 
 subhook::Hook *setupItemTypesHook;
 
@@ -30,7 +31,29 @@ void SetupItemTypesHookFunc()
 
     addresses::SetupItemTypesFunc();
 
-    for (std::size_t itemTypeCount = 0; itemTypeCount < structs::ItemType::VanillaCount; itemTypeCount++)
+    // Sub Rosa fills mesh pointers and other runtime fields during the native
+    // setup call above. Relocating earlier copies incomplete entries and makes
+    // its renderer dereference null vertex buffers.
+    const bool expandedClient = !*addresses::IsDedicated;
+    const auto executableBase = reinterpret_cast<std::uintptr_t>(addresses::Base.ptr);
+    if (expandedClient && !itemtypes::Install(executableBase))
+    {
+        api::GetSandiumLogger()->Log("Item type expansion failed after native setup");
+        return;
+    }
+
+    for (std::size_t itemTypeCount = structs::ItemType::VanillaCount;
+         expandedClient && itemTypeCount < structs::ItemType::ExpandedCount; ++itemTypeCount)
+    {
+        auto &custom = addresses::ItemTypes[itemTypeCount].customData;
+        if (!custom.typeIDPtr)
+            custom.typeIDPtr = new std::string();
+    }
+
+    const std::size_t itemTypeLimit = expandedClient
+        ? structs::ItemType::ExpandedCount
+        : structs::ItemType::VanillaCount;
+    for (std::size_t itemTypeCount = 0; itemTypeCount < itemTypeLimit; itemTypeCount++)
         addresses::ItemTypes[itemTypeCount].customData.index = itemTypeCount;
     
     GetItemTypeManager()->Clear();
@@ -59,6 +82,9 @@ void SetupItemTypesHookFunc()
         GetItemTypeManager()->NewID("sub_rosa", stream.str());
         *addresses::ItemTypes[itemTypeCount].customData.typeIDPtr = std::string("sub_rosa:") + stream.str();
     }
+
+    if (expandedClient)
+        custommodels::ConfigureRevolverType();
 
     GetMainLuaManager()->CallHooks("SetupItemTypes", "post");
 }

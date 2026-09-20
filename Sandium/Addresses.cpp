@@ -52,6 +52,8 @@ FuncAddress<addresses::AttachItemFuncType> addresses::AttachItemFunc;
 FuncAddress<addresses::LoadCMOFuncType> addresses::LoadCMOFunc;
 FuncAddress<addresses::BindItemModelFuncType> addresses::BindItemModelFunc;
 FuncAddress<addresses::LoadTextureFuncType> addresses::LoadTextureFunc;
+FuncAddress<addresses::RegisterSoundPCMFuncType> addresses::RegisterSoundPCMFunc;
+FuncAddress<addresses::PlayPositionedSoundFuncType> addresses::PlayPositionedSoundFunc;
 FuncAddress<addresses::CreateVehicleFuncType> addresses::CreateVehicleFunc;
 FuncAddress<addresses::CSDrawAtlasEntryFuncType> addresses::CSDrawAtlasEntryFunc;
 FuncAddress<addresses::CSDrawTextFuncType> addresses::CSDrawTextFunc;
@@ -129,6 +131,8 @@ label_client: {}
     addresses::LoadCMOFunc.Register(baseAddress + DYNADDR(0xE9A60, 0x0));
     addresses::BindItemModelFunc.Register(baseAddress + DYNADDR(0x13FCD0, 0x0));
     addresses::LoadTextureFunc.Register(baseAddress + DYNADDR(0xEDED0, 0x0));
+    addresses::RegisterSoundPCMFunc.Register(baseAddress + DYNADDR(0x69930, 0x0));
+    addresses::PlayPositionedSoundFunc.Register(baseAddress + DYNADDR(0x69FA0, 0x0));
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x5BCA0, 0xC92B0));
     addresses::CSDrawAtlasEntryFunc.Register(baseAddress + DYNADDR(0x6D300, 0x0));
     addresses::CSDrawTextFunc.Register(baseAddress + DYNADDR(0x6D930, 0x2C62C));
@@ -197,6 +201,8 @@ label_dedicated: {}
     addresses::LoadCMOFunc.Register(0);
     addresses::BindItemModelFunc.Register(0);
     addresses::LoadTextureFunc.Register(0);
+    addresses::RegisterSoundPCMFunc.Register(0);
+    addresses::PlayPositionedSoundFunc.Register(0);
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x414B0, 0x0));
     addresses::CSDrawAtlasEntryFunc.Register(0);
     addresses::CSDrawTextFunc.Register(0);

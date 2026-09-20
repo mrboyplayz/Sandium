@@ -6,6 +6,7 @@
 #include "api/Image.hpp"
 #include "api/Logging.hpp"
 #include "hooks/CreateItem.hpp"
+#include "TypeManager.hpp"
 
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
@@ -34,6 +35,14 @@ namespace custommodels
         bool reportedDraw = false;
         std::string boomboxTypeID = "suitium:boombox";
         std::array<bool, structs::Item::VanillaCount> boomboxItems{};
+
+        constexpr int REVOLVER_TYPE = 46; // first genuinely expanded item slot
+        constexpr int MAGNUM_TYPE = 5;
+        bool revolverConfigured = false;
+        bool revolverModelLoaded = false;
+        bool revolverSpawned = false;
+        bool revolverWasInGame = false;
+        std::string revolverTypeID = "sandium:revolver";
 
         GLuint Compile(GLenum type, const char *source)
         {
@@ -143,6 +152,88 @@ namespace custommodels
         definition.customData.typeIDPtr = &boomboxTypeID;
         definition.SetName("Boombox");
         api::GetSandiumLogger()->Log("Registered boombox tracking type with stable backing slot {}", boomboxBaseType);
+    }
+
+    void ConfigureRevolverType()
+    {
+        // The native table has been relocated to a 64-entry allocation, so the
+        // revolver can own ID 46 without replacing any vanilla item type.
+        auto *typeID = addresses::ItemTypes[REVOLVER_TYPE].customData.typeIDPtr;
+        addresses::ItemTypes[REVOLVER_TYPE] = addresses::ItemTypes[MAGNUM_TYPE];
+        addresses::ItemTypes[REVOLVER_TYPE].customData.index = REVOLVER_TYPE;
+        addresses::ItemTypes[REVOLVER_TYPE].customData.typeIDPtr = typeID;
+        *typeID = revolverTypeID;
+        addresses::ItemTypes[REVOLVER_TYPE].SetName("Revolver");
+        addresses::ItemTypes[REVOLVER_TYPE].ammoCount = 6;
+        GetItemTypeManager()->RegisterID("sandium", "revolver", REVOLVER_TYPE);
+        revolverConfigured = true;
+        // The copied Magnum definition already owns valid native mesh/material
+        // pointers.  Keep those for the item-table expansion test; calling the
+        // CMO upload routine with ID 46 reaches a second fixed-size renderer
+        // allocation which still needs to be relocated separately.
+        revolverModelLoaded = true;
+        api::GetSandiumLogger()->Log(
+            "Registered sandium:revolver as native weapon type {} using inherited Magnum rendering",
+            REVOLVER_TYPE);
+    }
+
+    void UpdateRevolver()
+    {
+        if (!revolverConfigured || !addresses::IsInGame.ptr)
+            return;
+
+        const bool inGame = *addresses::IsInGame;
+        if (!inGame)
+        {
+            revolverSpawned = false;
+            revolverWasInGame = false;
+            return;
+        }
+        if (!revolverWasInGame)
+        {
+            revolverSpawned = false;
+            revolverWasInGame = true;
+        }
+        if (revolverSpawned || !revolverModelLoaded)
+            return;
+
+        for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+        {
+            auto &human = addresses::Humans[h];
+            if (!human.isActive.b1)
+                continue;
+            int slot = -1;
+            for (int s = 0; s < 6; ++s)
+                if (s != 2 && human.inventorySlots[s].numberOfPlaces == 0)
+                {
+                    slot = s;
+                    break;
+                }
+            if (slot < 0)
+                return;
+
+            structs::CVector3 position = human.position;
+            structs::CVector3 velocity{};
+            structs::COrientation orientation{};
+            int itemID = -1;
+            {
+                subhook::ScopedHookRemove remove(createItemHook);
+                itemID = addresses::CreateItemFunc(REVOLVER_TYPE, &position, &velocity, &orientation);
+            }
+            if (itemID < 0 || itemID >= static_cast<int>(structs::Item::VanillaCount))
+                return;
+            addresses::Items[itemID].ammoCount = 6;
+            if (!addresses::AttachItemFunc.ptr ||
+                addresses::AttachItemFunc(itemID, -1, static_cast<int>(h), slot) == 0)
+            {
+                addresses::Items[itemID].isActive = {};
+                api::GetSandiumLogger()->Log("Revolver error: native inventory attachment failed for item {}", itemID);
+                return;
+            }
+            revolverSpawned = true;
+            api::GetSandiumLogger()->Log("Spawned loaded revolver item {} for human {} in slot {}", itemID, h, slot);
+            return;
+        }
     }
 
     void UpdateAndDraw()

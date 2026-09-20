@@ -79,6 +79,13 @@ namespace addresses
     using LoadTextureFuncType = std::uint64_t (int textureResourceID, const char *path, int filtered, int format);
     extern FuncAddress<LoadTextureFuncType> LoadTextureFunc;
 
+    // Native 0.38f audio mixer. Sounds are mono PCM resources; positioned
+    // sources are spatialized by Sub Rosa's default-48000.mhr HRTF pipeline.
+    using RegisterSoundPCMFuncType = void (unsigned int soundID, int byteLength, const std::int16_t *samples, float referenceDistance);
+    extern FuncAddress<RegisterSoundPCMFuncType> RegisterSoundPCMFunc;
+    using PlayPositionedSoundFuncType = int (int soundID, const structs::CVector3 *position, float volume, float pitch, unsigned int loop);
+    extern FuncAddress<PlayPositionedSoundFuncType> PlayPositionedSoundFunc;
+
     using CreateVehicleFuncType = int (int typeID, structs::CVector3 *position, structs::CVector3 *velocity, structs::COrientation *orientation, int colorID);
     extern FuncAddress<CreateVehicleFuncType> CreateVehicleFunc;
 

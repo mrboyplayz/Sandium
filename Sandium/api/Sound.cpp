@@ -1,5 +1,7 @@
 #include "Sound.hpp"
 
+#include "../Addresses.hpp"
+
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -41,7 +43,13 @@ namespace api
         IAudioClient *audioClient = nullptr;
         IAudioRenderClient *audioRender = nullptr;
         UINT32 audioBufferFrames = 0;
-        int audioChannels = 2;
+        // Media Foundation is explicitly configured to decode stereo.  Keep
+        // that separate from the endpoint channel count: the old mixer treated
+        // a stereo music file as if it already had the speaker layout of the
+        // output device, which also preserved the song's original stereo image.
+        // A positional source must first become one mono point source.
+        static constexpr int sourceChannels = 2;
+        int outputChannels = 2;
 
         std::thread audioThread;
         std::atomic<bool> audioRunning{false};
@@ -54,7 +62,34 @@ namespace api
         std::vector<float> audioQueue;
         bool audioEnd = false;
 
-        ~Impl() { StopThread(); }
+        bool native3D = false;
+        int nativeSourceID = -1;
+        float nativeVolume = 1.0f;
+
+        void SetNativeSourceValue(std::size_t field, float value)
+        {
+            if (!native3D || nativeSourceID < 0 || nativeSourceID >= 64 || !addresses::Base.ptr)
+                return;
+            constexpr std::size_t DWORD_BASE_RVA = 0x404A6C;
+            constexpr std::size_t SOURCE_STRIDE_DWORDS = 278720;
+            auto *globals = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uintptr_t>(addresses::Base.ptr) + DWORD_BASE_RVA);
+            std::memcpy(&globals[SOURCE_STRIDE_DWORDS * nativeSourceID + field], &value, sizeof(value));
+        }
+
+        void StopNativeSource()
+        {
+            if (native3D && nativeSourceID >= 0 && nativeSourceID < 64 && addresses::Base.ptr)
+            {
+                constexpr std::size_t DWORD_BASE_RVA = 0x404A6C;
+                constexpr std::size_t SOURCE_STRIDE_DWORDS = 278720;
+                constexpr std::size_t SOURCE_ACTIVE = 327697;
+                auto *globals = reinterpret_cast<std::uint32_t *>(reinterpret_cast<std::uintptr_t>(addresses::Base.ptr) + DWORD_BASE_RVA);
+                globals[SOURCE_STRIDE_DWORDS * nativeSourceID + SOURCE_ACTIVE] = 0;
+            }
+            nativeSourceID = -1;
+        }
+
+        ~Impl() { StopNativeSource(); StopThread(); }
 
         void StopThread()
         {
@@ -162,7 +197,7 @@ namespace api
                 std::size_t availableNow = 0;
                 {
                     const std::lock_guard<std::mutex> lock(audioMutex);
-                    availableNow = audioQueue.size() / audioChannels;
+                    availableNow = audioQueue.size() / sourceChannels;
                 }
                 if (audioEnd && availableNow == 0)
                 {
@@ -181,7 +216,7 @@ namespace api
                         std::size_t available = 0;
                         {
                             const std::lock_guard<std::mutex> lock(audioMutex);
-                            available = audioQueue.size() / audioChannels;
+                            available = audioQueue.size() / sourceChannels;
                         }
                         const UINT32 writable = static_cast<UINT32>(std::min<std::size_t>(frames, available));
                         float *output = reinterpret_cast<float *>(data);
@@ -190,16 +225,21 @@ namespace api
                             const std::lock_guard<std::mutex> lock(audioMutex);
                             const float vol = volume.load();
                             const float gl_ = gainL.load(), gr_ = gainR.load();
-                            const std::ptrdiff_t count = static_cast<std::ptrdiff_t>(writable) * audioChannels;
-                            for (std::ptrdiff_t i = 0; i < count; ++i)
+                            const std::ptrdiff_t count = static_cast<std::ptrdiff_t>(writable) * sourceChannels;
+                            for (UINT32 frame = 0; frame < writable; ++frame)
                             {
-                                const float g = (i % audioChannels) == 0 ? gl_
-                                                : ((i % audioChannels) == 1 ? gr_ : (gl_ + gr_) * 0.5f);
-                                output[i] = audioQueue[i] * vol * g;
+                                const std::ptrdiff_t source = static_cast<std::ptrdiff_t>(frame) * sourceChannels;
+                                const float mono = (audioQueue[source] + audioQueue[source + 1]) * 0.5f * vol;
+                                const std::ptrdiff_t destination = static_cast<std::ptrdiff_t>(frame) * outputChannels;
+                                for (int channel = 0; channel < outputChannels; ++channel)
+                                    output[destination + channel] = 0.0f;
+                                output[destination] = mono * gl_;
+                                if (outputChannels > 1)
+                                    output[destination + 1] = mono * gr_;
                             }
                             audioQueue.erase(audioQueue.begin(), audioQueue.begin() + count);
                         }
-                        for (UINT32 i = static_cast<UINT32>(writable) * audioChannels; i < frames * audioChannels; ++i)
+                        for (UINT32 i = static_cast<UINT32>(writable) * outputChannels; i < frames * outputChannels; ++i)
                             output[i] = 0.0f;
                         audioRender->ReleaseBuffer(frames, 0);
                     }
@@ -208,7 +248,7 @@ namespace api
                 auto bufferedFrames = [&]()
                 {
                     const std::lock_guard<std::mutex> lock(audioMutex);
-                    return audioQueue.size() / static_cast<std::size_t>(audioChannels);
+                    return audioQueue.size() / static_cast<std::size_t>(sourceChannels);
                 };
                 while (playing && !audioEnd && bufferedFrames() < static_cast<std::size_t>(audioBufferFrames))
                 {
@@ -281,7 +321,7 @@ namespace api
             throw std::runtime_error("Could not initialize audio output for: " + path);
         }
         if (mixFormat)
-            sound->impl->audioChannels = mixFormat->nChannels ? mixFormat->nChannels : 2;
+            sound->impl->outputChannels = mixFormat->nChannels ? mixFormat->nChannels : 2;
         if (mixFormat)
             CoTaskMemFree(mixFormat);
         SndRelease(device);
@@ -289,6 +329,80 @@ namespace api
 
         sound->impl->audioRunning = true;
         sound->impl->audioThread = std::thread(&Impl::AudioThreadProc, sound->impl.get());
+        return sound;
+    }
+
+    std::shared_ptr<Sound> Sound::Load3D(const std::string &path)
+    {
+        if (!addresses::RegisterSoundPCMFunc.ptr || !addresses::PlayPositionedSoundFunc.ptr)
+            throw std::runtime_error("Sub Rosa native audio functions are unavailable");
+
+        auto sound = std::shared_ptr<Sound>(new Sound());
+        sound->impl = std::unique_ptr<Impl>(new Impl());
+        sound->impl->native3D = true;
+
+        if (FAILED(MFStartup(MF_VERSION)))
+            throw std::runtime_error("Media Foundation is not available");
+        wchar_t widePath[MAX_PATH];
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, widePath, MAX_PATH);
+        IMFSourceReader *reader = nullptr;
+        if (FAILED(MFCreateSourceReaderFromURL(widePath, nullptr, &reader)) || !reader)
+            throw std::runtime_error("Could not open audio file: " + path);
+
+        reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
+        reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
+        IMFMediaType *type = nullptr;
+        MFCreateMediaType(&type);
+        type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+        type->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
+        type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
+        type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 1);
+        type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+        type->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 2);
+        type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 96000);
+        const HRESULT mediaResult = reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, type);
+        SndRelease(type);
+        if (FAILED(mediaResult))
+        {
+            SndRelease(reader);
+            throw std::runtime_error("Could not decode native 3D audio: " + path);
+        }
+
+        std::vector<std::int16_t> pcm;
+        while (true)
+        {
+            IMFSample *sample = nullptr;
+            DWORD flags = 0;
+            long long timestamp = 0;
+            const HRESULT readResult = reader->ReadSample(MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, &timestamp, &sample);
+            if (FAILED(readResult) || (flags & MF_SOURCE_READERF_ENDOFSTREAM))
+            {
+                SndRelease(sample);
+                break;
+            }
+            if (!sample)
+                continue;
+            IMFMediaBuffer *buffer = nullptr;
+            if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buffer)) && buffer)
+            {
+                BYTE *data = nullptr;
+                DWORD maximum = 0, length = 0;
+                if (SUCCEEDED(buffer->Lock(&data, &maximum, &length)) && data)
+                {
+                    const auto *samples = reinterpret_cast<const std::int16_t *>(data);
+                    pcm.insert(pcm.end(), samples, samples + length / sizeof(std::int16_t));
+                    buffer->Unlock();
+                }
+            }
+            SndRelease(buffer);
+            SndRelease(sample);
+        }
+        SndRelease(reader);
+        if (pcm.empty() || pcm.size() > static_cast<std::size_t>(INT_MAX / 2))
+            throw std::runtime_error("Native 3D audio decoded no usable samples: " + path);
+
+        constexpr unsigned int RADIO_SOUND_ID = 4095;
+        addresses::RegisterSoundPCMFunc(RADIO_SOUND_ID, static_cast<int>(pcm.size() * sizeof(std::int16_t)), pcm.data(), 1.0f);
         return sound;
     }
 
@@ -309,8 +423,51 @@ namespace api
         impl->gainR = right;
     }
 
+    void Sound::Play3D(float x, float y, float z, float volume, bool loop)
+    {
+        if (!impl->native3D)
+        {
+            Play(volume);
+            return;
+        }
+        impl->StopNativeSource();
+        structs::CVector3 position(x, y, z);
+        impl->nativeVolume = volume;
+        impl->nativeSourceID = addresses::PlayPositionedSoundFunc(4095, &position, volume, 1.0f, loop ? 1u : 0u);
+        if (impl->nativeSourceID < 0)
+            throw std::runtime_error("Sub Rosa has no free native audio source");
+    }
+
+    void Sound::SetPosition(float x, float y, float z)
+    {
+        constexpr std::size_t SOURCE_X = 606302;
+        impl->SetNativeSourceValue(SOURCE_X, x);
+        impl->SetNativeSourceValue(SOURCE_X + 1, y);
+        impl->SetNativeSourceValue(SOURCE_X + 2, z);
+    }
+
+    void Sound::SetVolume(float volume)
+    {
+        impl->nativeVolume = volume;
+        constexpr std::size_t SOURCE_GAIN = 327699;
+        impl->SetNativeSourceValue(SOURCE_GAIN, volume);
+    }
+
+    void Sound::Pause()
+    {
+        if (impl->native3D) { constexpr std::size_t SOURCE_GAIN = 327699; impl->SetNativeSourceValue(SOURCE_GAIN, 0.0f); return; }
+        impl->playing = false;
+    }
+
+    void Sound::Resume()
+    {
+        if (impl->native3D) { SetVolume(impl->nativeVolume); return; }
+        impl->playing = true;
+    }
+
     void Sound::Stop()
     {
+        if (impl->native3D) { impl->StopNativeSource(); return; }
         impl->flushRequested = true;
         impl->playing = false;
     }
@@ -323,7 +480,13 @@ namespace api
         (void)path;
         throw std::runtime_error("Sound.Load is currently available on Windows only");
     }
+    std::shared_ptr<Sound> Sound::Load3D(const std::string &path) { return Load(path); }
     Sound::~Sound() = default;
     void Sound::Play() {}
+    void Sound::Play3D(float, float, float, float, bool) {}
+    void Sound::SetPosition(float, float, float) {}
+    void Sound::SetVolume(float) {}
+    void Sound::Pause() {}
+    void Sound::Resume() {}
 }
 #endif

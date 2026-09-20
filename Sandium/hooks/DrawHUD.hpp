@@ -34,15 +34,15 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
 {
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     painshader::Update();
-    camerafx::Update();
+    // Pain camera effects, shaders, and debug stats are disabled for now.
     radioplayer::Update();
     carradio::Update();
     bettercrashes::Update();
     brokenbones::Update();
+    custommodels::UpdateRevolver();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();
-    painshader::Draw();
     carradio::Draw();
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
@@ -50,6 +50,5 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     api::DrawItemBillboards();
     api::FlushImageLayer(true);
     api::FlushQueuedTexts(); // Lua UI text on top of the game's HUD
-    grainshader::Draw();     // decompiled Source film grain, pain-driven
 }
 #endif
