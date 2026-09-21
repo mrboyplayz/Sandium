@@ -6,3 +6,5 @@ add_subdirectory("Sandium")
 if (WIN32)
 	add_subdirectory("SandiumLauncher")
 endif ()
+
+add_subdirectory("Tools/poser")

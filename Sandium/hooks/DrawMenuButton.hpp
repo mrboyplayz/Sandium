@@ -16,12 +16,23 @@ int DrawMenuButtonHookFunc(const char *text);
 #include <cstring>
 
 #include "../Addresses.hpp"
+#include "../Gate.hpp"
 
 subhook::Hook *drawMenuButtonHook;
 
 int DrawMenuButtonHookFunc(const char *text)
 {
     subhook::ScopedHookRemove scopedRemove(drawMenuButtonHook);
+
+    if (std::strcmp(text, "Practice") == 0)
+    {
+        // Never let the hidden main-menu D shortcut activate through the
+        // password overlay. After unlocking, Practice remains clickable but
+        // deliberately has no keyboard shortcut.
+        if (gate::Locked())
+            return 0;
+        *addresses::NextMenuButtonKey = static_cast<SDL_Scancode>(-1);
+    }
 
     if (*addresses::MenuTypeID != 3)
         return addresses::DrawMenuButtonFunc(text); // we dont care if this is not options menu

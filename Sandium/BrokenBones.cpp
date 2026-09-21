@@ -7,6 +7,7 @@
 #include "ServerMedia.hpp"
 #include "structs/Human.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
@@ -154,13 +155,53 @@ namespace brokenbones
             std::thread(EventsThreadProc).detach();
         }
         std::vector<RecordSet> cachedSets;
-        bool setsScanned = false;
+        std::atomic<bool> setsScanned{false};
+        std::atomic<bool> scanStarted{false};
+
+        // The region walk reads memory VirtualQuery only validated moments
+        // earlier; background threads can decommit a page in between, so the
+        // guarded scan lives in its own SEH function (with no objects that
+        // need unwinding) and reports faults through its return value.
+        bool ScanRegionForRecordSets(const std::uint8_t *begin, const std::uint8_t *end,
+                                     std::vector<RecordSet> &out)
+        {
+            __try
+            {
+                auto p = reinterpret_cast<const std::uint32_t *>(begin);
+                const auto regionEnd = reinterpret_cast<const std::uint32_t *>(end);
+                while (p + 4 < regionEnd)
+                {
+                    if (MatchesRecord(p))
+                    {
+                        bool fullSet = true;
+                        for (int slot = 1; slot < 16; ++slot)
+                            if (!MatchesRecord(reinterpret_cast<const std::uint32_t *>(
+                                    reinterpret_cast<const char *>(p) + 0xF4 * slot)))
+                            {
+                                fullSet = false;
+                                break;
+                            }
+                        if (fullSet)
+                        {
+                            out.push_back({const_cast<std::uint32_t *>(p)});
+                            p += 16 * 0xF4 / 4;
+                            continue;
+                        }
+                    }
+                    ++p;
+                }
+                return true;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                return false;
+            }
+        }
 
         std::vector<RecordSet> FindRecordSets()
         {
-            if (setsScanned)
+            if (setsScanned.load(std::memory_order_acquire))
                 return cachedSets;
-            setsScanned = true;
 
             std::vector<RecordSet> sets;
             const auto base = reinterpret_cast<std::uintptr_t>(addresses::Base.ptr);
@@ -175,45 +216,38 @@ namespace brokenbones
                                       (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) &&
                                       !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS));
                 if (readable)
-                {
-                    auto p = reinterpret_cast<const std::uint32_t *>(mbi.BaseAddress);
-                    const auto regionEnd = reinterpret_cast<const std::uint32_t *>(
-                        reinterpret_cast<const char *>(mbi.BaseAddress) + mbi.RegionSize);
-                    while (p + 4 < regionEnd)
-                    {
-                        if (MatchesRecord(p))
-                        {
-                            bool fullSet = true;
-                            for (int slot = 1; slot < 16; ++slot)
-                                if (!MatchesRecord(reinterpret_cast<const std::uint32_t *>(
-                                        reinterpret_cast<const char *>(p) + 0xF4 * slot)))
-                                {
-                                    fullSet = false;
-                                    break;
-                                }
-                            if (fullSet)
-                            {
-                                sets.push_back({const_cast<std::uint32_t *>(p)});
-                                p += 16 * 0xF4 / 4;
-                                continue;
-                            }
-                        }
-                        ++p;
-                    }
-                }
+                    ScanRegionForRecordSets(reinterpret_cast<const std::uint8_t *>(mbi.BaseAddress),
+                                            reinterpret_cast<const std::uint8_t *>(mbi.BaseAddress) +
+                                                mbi.RegionSize,
+                                            sets);
                 page = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
             }
 
             // belt and braces: a single bad page must never take the game down
-            // (SEH lives in its own function: __try forbids object unwinding)
             for (const RecordSet &set : sets)
                 if (!ProbeRecordSet(set))
                 {
-                    cachedSets.clear();
-                    return cachedSets;
+                    sets.clear();
+                    break;
                 }
             cachedSets = std::move(sets);
+            setsScanned.store(true, std::memory_order_release);
             return cachedSets;
+        }
+
+        void ScanThreadProc()
+        {
+            FindRecordSets();
+        }
+
+        // Pre-scan on a worker thread as soon as the game loop runs, so the
+        // first bone break never walks 2 GB of address space on the main
+        // thread (which froze the game and raced page decommits into crashes).
+        void StartRecordScan()
+        {
+            if (scanStarted.exchange(true))
+                return;
+            std::thread(ScanThreadProc).detach();
         }
 
         bool ProbeRecordSet(const RecordSet &set)
@@ -248,8 +282,14 @@ namespace brokenbones
             }
             if (!boneCount)
                 return;
-            for (const RecordSet &set : FindRecordSets())
+            // If the background scan has not landed yet, skip this break:
+            // scanning on the main thread freezes the game for seconds.
+            if (!setsScanned.load(std::memory_order_acquire))
+                return;
+            for (const RecordSet &set : cachedSets)
             {
+                if (!ProbeRecordSet(set))
+                    continue; // freed or decommitted since the scan
                 for (int slot = 0; slot < 16; ++slot)
                 {
                     for (int b = 0; b < boneCount; ++b)
@@ -384,6 +424,7 @@ namespace brokenbones
 
     void Update()
     {
+        StartRecordScan();
         StartEvents();
         CheckChatCommands();
         // periodic ground-truth dump of the local human's limb HP

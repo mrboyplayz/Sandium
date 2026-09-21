@@ -1,8 +1,7 @@
 """Convert Wavefront OBJ files for Suitium custom models.
 
-The default output is a C++ header containing an expanded triangle list. The
-game uploads that list to OpenGL when Suitium starts, so it does not depend on
-Sub Rosa's internal CMO resource table. ``--cmo`` retains legacy CMO v3 output.
+The default output is a C++ header containing an expanded triangle list.
+``--cmo`` writes a native CMO v3 file suitable for ``ItemType:SetModel``.
 """
 import argparse
 import math
@@ -15,14 +14,19 @@ def index(value: str, size: int) -> int:
     return value - 1 if value > 0 else size + value
 
 
-def parse(source: Path, scale: float = 1.0):
+def parse(source: Path, scale: float = 1.0, yaw_degrees: float = 0.0):
     positions, texcoords, triangles = [], [], []
+    yaw = math.radians(yaw_degrees)
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
     for raw in source.read_text(errors="replace").splitlines():
         fields = raw.split()
         if not fields or fields[0].startswith("#"):
             continue
         if fields[0] == "v" and len(fields) >= 4:
-            positions.append(tuple(value * scale for value in map(float, fields[1:4])))
+            x, y, z = (value * scale for value in map(float, fields[1:4]))
+            # Yaw rotates the authored mesh about Y so its muzzle lines up
+            # with Sub Rosa's convention (shipped models point +Z).
+            positions.append((x * cos_yaw + z * sin_yaw, y, -x * sin_yaw + z * cos_yaw))
         elif fields[0] == "vt" and len(fields) >= 3:
             texcoords.append(tuple(map(float, fields[1:3])))
         elif fields[0] == "f" and len(fields) >= 4:
@@ -33,7 +37,7 @@ def parse(source: Path, scale: float = 1.0):
                 uv = (0.0, 0.0)
                 if len(parts) > 1 and parts[1]:
                     uv = texcoords[index(parts[1], len(texcoords))]
-                face.append((position, (uv[0], 1.0 - uv[1])))
+                face.append((position, uv))
             for i in range(1, len(face) - 1):
                 # Sub Rosa's shipped CMO meshes use the opposite winding from
                 # ordinary Wavefront exports. Keep it here so native back-face
@@ -106,10 +110,12 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--symbol", default="runtimeModelVertices")
-    parser.add_argument("--cmo", action="store_true", help="write legacy CMO instead of a C++ runtime mesh")
+    parser.add_argument("--cmo", action="store_true", help="write native CMO v3 instead of a C++ runtime mesh")
     parser.add_argument("--scale", type=float, default=1.0, help="uniform model scale applied during conversion")
+    parser.add_argument("--yaw-degrees", type=float, default=0.0,
+                        help="yaw rotation about Y applied during conversion (use 180 for OBJs authored muzzle-backwards)")
     args = parser.parse_args()
-    triangles = parse(args.source, args.scale)
+    triangles = parse(args.source, args.scale, args.yaw_degrees)
     vertices = expanded(triangles)
     if args.cmo:
         write_cmo(triangles, args.output)

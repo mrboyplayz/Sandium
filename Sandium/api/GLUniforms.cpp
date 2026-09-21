@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -42,7 +43,8 @@ namespace api
                 SEM_NONE = -1,
                 SEM_MODELVIEWPROJECTION = 0,
                 SEM_VIEWPOSITION = 1,
-                SEM_VIEWMATRIX = 2
+                SEM_VIEWMATRIX = 2,
+                SEM_PROJECTIONMATRIX = 3
             };
 
             std::mutex stateMutex;
@@ -69,6 +71,56 @@ namespace api
             }
 
             std::atomic<bool> prepared{false};
+            std::atomic<int> fieldOfView{70};
+
+            void LoadFieldOfView()
+            {
+                std::ifstream file("sandium_fov.txt");
+                int value = 70;
+                if (file >> value)
+                    fieldOfView.store(value < 60 ? 60 : (value > 120 ? 120 : value));
+            }
+
+            void SaveFieldOfView(int value)
+            {
+                std::ofstream file("sandium_fov.txt", std::ios::trunc);
+                if (file)
+                    file << value << '\n';
+            }
+
+            void ApplyFieldOfView(float *matrix, bool transposed)
+            {
+                const int degrees = fieldOfView.load();
+                if (degrees == 70)
+                    return;
+
+                constexpr float pi = 3.14159265358979323846f;
+                const float oldHalf = 70.0f * pi / 360.0f;
+                const float newHalf = static_cast<float>(degrees) * pi / 360.0f;
+                const float scale = std::tan(oldHalf) / std::tan(newHalf);
+
+                // Left-multiply the combined matrix by an X/Y clip-space scale.
+                // This changes FOV without disturbing camera depth. Apply it to
+                // every perspective MVP so terrain, models, water, and auxiliary
+                // scene passes all agree; the earlier camera-program-only filter
+                // was what caused the split rendering shown in testing.
+                if (!transposed)
+                {
+                    for (int column = 0; column < 4; ++column)
+                    {
+                        matrix[column * 4] *= scale;
+                        matrix[column * 4 + 1] *= scale;
+                    }
+                }
+                else
+                {
+                    for (int index = 0; index < 4; ++index)
+                    {
+                        matrix[index] *= scale;
+                        matrix[4 + index] *= scale;
+                    }
+                }
+            }
 
             // real driver entry points, captured when the wrappers are handed out
             // or resolved through SDL at Prepare time
@@ -104,6 +156,8 @@ namespace api
                         semantic = SEM_VIEWPOSITION;
                     else if (realGetUniformLocation(program, "viewmatrix") == location)
                         semantic = SEM_VIEWMATRIX;
+                    else if (realGetUniformLocation(program, "projectionmatrix") == location)
+                        semantic = SEM_PROJECTIONMATRIX;
                 }
                 {
                     const std::lock_guard<std::mutex> lock(stateMutex);
@@ -138,6 +192,8 @@ namespace api
                         semantic = SEM_VIEWPOSITION;
                     else if (std::strcmp(name, "viewmatrix") == 0)
                         semantic = SEM_VIEWMATRIX;
+                    else if (std::strcmp(name, "projectionmatrix") == 0)
+                        semantic = SEM_PROJECTIONMATRIX;
                     if (semantic != SEM_NONE)
                     {
                         const std::lock_guard<std::mutex> lock(stateMutex);
@@ -150,8 +206,10 @@ namespace api
             void HookUniformMatrix4fv(int location, int count, unsigned char transpose, const float *value)
             {
                 float fxView[16];
+                float fovMatrix[16];
+                const unsigned int program = CurrentProgram();
                 if (count == 1 && value &&
-                    SemanticFor(CurrentProgram(), location) == SEM_VIEWMATRIX)
+                    SemanticFor(program, location) == SEM_VIEWMATRIX)
                 {
                     const std::lock_guard<std::mutex> lock(stateMutex);
                     std::memcpy(lastViewMatrix, value, sizeof(lastViewMatrix));
@@ -161,10 +219,30 @@ namespace api
                     if (camerafx::ViewOverride(fxView, lastViewTransposed))
                         value = fxView;
                 }
+
+                if (count == 1 && value &&
+                    SemanticFor(program, location) == SEM_MODELVIEWPROJECTION)
+                {
+                    // Affine/orthographic UI matrices end in (0,0,0,1). A
+                    // perspective view-projection has a non-affine final row.
+                    const bool isTransposed = transpose != 0;
+                    const int a = isTransposed ? 12 : 3;
+                    const int b = isTransposed ? 13 : 7;
+                    const int c = isTransposed ? 14 : 11;
+                    const bool perspective = std::fabs(value[a]) > 0.0001f ||
+                                             std::fabs(value[b]) > 0.0001f ||
+                                             std::fabs(value[c]) > 0.0001f ||
+                                             std::fabs(value[15] - 1.0f) > 0.0001f;
+                    if (perspective)
+                    {
+                        std::memcpy(fovMatrix, value, sizeof(fovMatrix));
+                        ApplyFieldOfView(fovMatrix, isTransposed);
+                        value = fovMatrix;
+                    }
+                }
                 realUniformMatrix4fv(location, count, transpose, value);
                 if (count == 1 && value)
                 {
-                    const unsigned int program = CurrentProgram();
                     if (SemanticFor(program, location) == SEM_MODELVIEWPROJECTION)
                     {
                         const std::lock_guard<std::mutex> lock(stateMutex);
@@ -252,14 +330,27 @@ namespace api
                         DWORD oldProtect = 0;
                         if (VirtualProtect(mbi.BaseAddress, size, PAGE_READWRITE, &oldProtect))
                         {
-                            for (std::uintptr_t offset = 0; offset + sizeof(void *) <= size; offset += sizeof(void *))
+                            // Private renderer allocations can be released by
+                            // the game while this background scan is walking
+                            // them. Guard the complete page so that a racing
+                            // decommit skips that page instead of crashing the
+                            // process with an access violation.
+                            __try
                             {
-                                void *at = reinterpret_cast<void *>(base + offset);
-                                if (*reinterpret_cast<std::uintptr_t *>(at) == needle)
+                                for (std::uintptr_t offset = 0; offset + sizeof(void *) <= size; offset += sizeof(void *))
                                 {
-                                    *reinterpret_cast<std::uintptr_t *>(at) = replacement;
-                                    ++patched;
+                                    void *at = reinterpret_cast<void *>(base + offset);
+                                    if (*reinterpret_cast<std::uintptr_t *>(at) == needle)
+                                    {
+                                        *reinterpret_cast<std::uintptr_t *>(at) = replacement;
+                                        ++patched;
+                                    }
                                 }
+                            }
+                            __except (EXCEPTION_EXECUTE_HANDLER)
+                            {
+                                // Region changed after VirtualQuery; continue
+                                // with the next independently queried region.
                             }
                             VirtualProtect(mbi.BaseAddress, size, oldProtect, &oldProtect);
                         }
@@ -288,6 +379,7 @@ namespace api
 #if _WIN32
             if (prepared.exchange(true))
                 return;
+            LoadFieldOfView();
             const HMODULE sdl = GetModuleHandleA("SDL2.dll");
             if (!sdl)
                 return;
@@ -316,17 +408,43 @@ namespace api
                         if (complete)
                             return;
                     }
-                    PatchPointer(reinterpret_cast<std::uintptr_t>(realUniformMatrix4fv),
-                                 reinterpret_cast<std::uintptr_t>(&HookUniformMatrix4fv));
+                    const int matrixPatches = PatchPointer(
+                        reinterpret_cast<std::uintptr_t>(realUniformMatrix4fv),
+                        reinterpret_cast<std::uintptr_t>(&HookUniformMatrix4fv));
                     PatchPointer(reinterpret_cast<std::uintptr_t>(realGetUniformLocation),
                                  reinterpret_cast<std::uintptr_t>(&HookGetUniformLocation));
                     PatchPointer(reinterpret_cast<std::uintptr_t>(realUniform3fv),
                                  reinterpret_cast<std::uintptr_t>(&HookUniform3fv));
                     PatchPointer(reinterpret_cast<std::uintptr_t>(realUniform3f),
                                  reinterpret_cast<std::uintptr_t>(&HookUniform3f));
+                    // Once the matrix entry point is replaced, rescanning all
+                    // private allocations cannot find that original pointer and
+                    // only creates a race with later menu/game allocations.
+                    if (matrixPatches > 0)
+                        return;
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
             }).detach();
+#endif
+        }
+
+        int FieldOfView()
+        {
+#if _WIN32
+            return fieldOfView.load();
+#else
+            return 70;
+#endif
+        }
+
+        void SetFieldOfView(int degrees)
+        {
+#if _WIN32
+            const int clamped = degrees < 60 ? 60 : (degrees > 120 ? 120 : degrees);
+            if (fieldOfView.exchange(clamped) != clamped)
+                SaveFieldOfView(clamped);
+#else
+            (void)degrees;
 #endif
         }
 

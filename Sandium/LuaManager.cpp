@@ -27,6 +27,7 @@
 #include "structs/Vehicle.hpp"
 #include "structs/VehicleType.hpp"
 #include "TypeManager.hpp"
+#include "ItemModels.hpp"
 
 // https://github.com/moonjit/moonjit/blob/master/doc/c_api.md#luajit_setmodel-idx-luajit_mode_wrapcfuncflag
 static int wrapExceptions(lua_State* L, lua_CFunction f) 
@@ -442,6 +443,15 @@ void LuaManager::DefineGameTypes()
 
 		"index", sol::property(&structs::ItemType::GetIndex),
 		"typeID", sol::property(&structs::ItemType::GetTypeID),
+		"SetModel", [](structs::ItemType &itemType, const std::string &cmoPath,
+					   const std::string &texturePath)
+		{
+			return itemmodels::Set(itemType, cmoPath, texturePath);
+		},
+		"SetTexture", [](structs::ItemType &itemType, const std::string &texturePath)
+		{
+			return itemmodels::SetTexture(itemType, texturePath);
+		},
 
 		"GetAll", [](const sol::this_state &state)
 		{

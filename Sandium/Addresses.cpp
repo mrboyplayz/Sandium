@@ -32,6 +32,12 @@ DataAddress<char> addresses::SteamTicketBuffer;
 DataAddress<void *> addresses::SDLWindowPtr;
 DataAddress<structs::CSKeyboard> addresses::CSKeyboard;
 DataAddress<structs::CSTexture> addresses::CSTextures;
+DataAddress<int> addresses::ModelResourceCount;
+DataAddress<int> addresses::ModelTextureResources;
+DataAddress<int> addresses::ItemModelResources;
+DataAddress<structs::LineIntersectResult> addresses::LineIntersectResult;
+DataAddress<int> addresses::LevelTextureCount;
+DataAddress<char> addresses::LevelTextureNames;
 DataAddress<structs::CBoolean> addresses::IsInGame;
 DataAddress<structs::CBoolean> addresses::GamePaused;
 DataAddress<int> addresses::MenuOptionsSectionID;
@@ -54,6 +60,8 @@ FuncAddress<addresses::BindItemModelFuncType> addresses::BindItemModelFunc;
 FuncAddress<addresses::LoadTextureFuncType> addresses::LoadTextureFunc;
 FuncAddress<addresses::RegisterSoundPCMFuncType> addresses::RegisterSoundPCMFunc;
 FuncAddress<addresses::PlayPositionedSoundFuncType> addresses::PlayPositionedSoundFunc;
+FuncAddress<addresses::LineIntersectLevelFuncType> addresses::LineIntersectLevelFunc;
+FuncAddress<addresses::SurfaceMaterialLookupFuncType> addresses::SurfaceMaterialLookupFunc;
 FuncAddress<addresses::CreateVehicleFuncType> addresses::CreateVehicleFunc;
 FuncAddress<addresses::CSDrawAtlasEntryFuncType> addresses::CSDrawAtlasEntryFunc;
 FuncAddress<addresses::CSDrawTextFuncType> addresses::CSDrawTextFunc;
@@ -104,6 +112,12 @@ label_client: {}
 
     addresses::CSKeyboard.Register(baseAddress + DYNADDR(0x43F7C964, 0x0));
     addresses::CSTextures.Register(baseAddress + DYNADDR(0x67971DA0, 0x0));
+    addresses::ModelResourceCount.Register(baseAddress + DYNADDR(0x43EBB0C0, 0x0));
+    addresses::ModelTextureResources.Register(baseAddress + DYNADDR(0x43E977C4, 0x0));
+    addresses::ItemModelResources.Register(baseAddress + DYNADDR(0x43EBB6C4, 0x0));
+    addresses::LineIntersectResult.Register(baseAddress + DYNADDR(0x11A84880, 0x0));
+    addresses::LevelTextureCount.Register(baseAddress + DYNADDR(0x64CFF560, 0x0));
+    addresses::LevelTextureNames.Register(baseAddress + DYNADDR(0x64CFFCF8, 0x0));
 
     addresses::SunAngle.Register(baseAddress + DYNADDR(0x1F336818, 0x0));
     addresses::SunTime.Register(baseAddress + DYNADDR(0x2B2A2EC0, 0x0));
@@ -133,6 +147,8 @@ label_client: {}
     addresses::LoadTextureFunc.Register(baseAddress + DYNADDR(0xEDED0, 0x0));
     addresses::RegisterSoundPCMFunc.Register(baseAddress + DYNADDR(0x69930, 0x0));
     addresses::PlayPositionedSoundFunc.Register(baseAddress + DYNADDR(0x69FA0, 0x0));
+    addresses::LineIntersectLevelFunc.Register(baseAddress + DYNADDR(0xDC050, 0x0));
+    addresses::SurfaceMaterialLookupFunc.Register(baseAddress + DYNADDR(0x12DE0, 0x0));
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x5BCA0, 0xC92B0));
     addresses::CSDrawAtlasEntryFunc.Register(baseAddress + DYNADDR(0x6D300, 0x0));
     addresses::CSDrawTextFunc.Register(baseAddress + DYNADDR(0x6D930, 0x2C62C));
@@ -177,6 +193,12 @@ label_dedicated: {}
 
     addresses::CSKeyboard.Register(0);
     addresses::CSTextures.Register(0);
+    addresses::ModelResourceCount.Register(0);
+    addresses::ModelTextureResources.Register(0);
+    addresses::ItemModelResources.Register(0);
+    addresses::LineIntersectResult.Register(0);
+    addresses::LevelTextureCount.Register(0);
+    addresses::LevelTextureNames.Register(0);
 
     addresses::IsInGame.Register(0);
     addresses::GamePaused.Register(0);
@@ -203,6 +225,8 @@ label_dedicated: {}
     addresses::LoadTextureFunc.Register(0);
     addresses::RegisterSoundPCMFunc.Register(0);
     addresses::PlayPositionedSoundFunc.Register(0);
+    addresses::LineIntersectLevelFunc.Register(0);
+    addresses::SurfaceMaterialLookupFunc.Register(0);
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x414B0, 0x0));
     addresses::CSDrawAtlasEntryFunc.Register(0);
     addresses::CSDrawTextFunc.Register(0);

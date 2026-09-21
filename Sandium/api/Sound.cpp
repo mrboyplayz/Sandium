@@ -63,6 +63,7 @@ namespace api
         bool audioEnd = false;
 
         bool native3D = false;
+        unsigned int nativeSoundID = 4095;
         int nativeSourceID = -1;
         float nativeVolume = 1.0f;
 
@@ -334,12 +335,19 @@ namespace api
 
     std::shared_ptr<Sound> Sound::Load3D(const std::string &path)
     {
+        return Load3D(path, 4095, 1.0f);
+    }
+
+    std::shared_ptr<Sound> Sound::Load3D(const std::string &path, unsigned int soundID,
+                                         float referenceDistance)
+    {
         if (!addresses::RegisterSoundPCMFunc.ptr || !addresses::PlayPositionedSoundFunc.ptr)
             throw std::runtime_error("Sub Rosa native audio functions are unavailable");
 
         auto sound = std::shared_ptr<Sound>(new Sound());
         sound->impl = std::unique_ptr<Impl>(new Impl());
         sound->impl->native3D = true;
+        sound->impl->nativeSoundID = soundID;
 
         if (FAILED(MFStartup(MF_VERSION)))
             throw std::runtime_error("Media Foundation is not available");
@@ -401,8 +409,8 @@ namespace api
         if (pcm.empty() || pcm.size() > static_cast<std::size_t>(INT_MAX / 2))
             throw std::runtime_error("Native 3D audio decoded no usable samples: " + path);
 
-        constexpr unsigned int RADIO_SOUND_ID = 4095;
-        addresses::RegisterSoundPCMFunc(RADIO_SOUND_ID, static_cast<int>(pcm.size() * sizeof(std::int16_t)), pcm.data(), 1.0f);
+        addresses::RegisterSoundPCMFunc(soundID, static_cast<int>(pcm.size() * sizeof(std::int16_t)),
+                                        pcm.data(), referenceDistance);
         return sound;
     }
 
@@ -433,9 +441,22 @@ namespace api
         impl->StopNativeSource();
         structs::CVector3 position(x, y, z);
         impl->nativeVolume = volume;
-        impl->nativeSourceID = addresses::PlayPositionedSoundFunc(4095, &position, volume, 1.0f, loop ? 1u : 0u);
+        impl->nativeSourceID = addresses::PlayPositionedSoundFunc(
+            static_cast<int>(impl->nativeSoundID), &position, volume, 1.0f, loop ? 1u : 0u);
         if (impl->nativeSourceID < 0)
             throw std::runtime_error("Sub Rosa has no free native audio source");
+    }
+
+    void Sound::PlayOneShot3D(float x, float y, float z, float volume, float pitch)
+    {
+        if (!impl->native3D)
+        {
+            Play(volume);
+            return;
+        }
+        structs::CVector3 position(x, y, z);
+        addresses::PlayPositionedSoundFunc(static_cast<int>(impl->nativeSoundID), &position,
+                                            volume, pitch, 0u);
     }
 
     void Sound::SetPosition(float x, float y, float z)
@@ -481,12 +502,16 @@ namespace api
         throw std::runtime_error("Sound.Load is currently available on Windows only");
     }
     std::shared_ptr<Sound> Sound::Load3D(const std::string &path) { return Load(path); }
+    std::shared_ptr<Sound> Sound::Load3D(const std::string &path, unsigned int, float) { return Load(path); }
     Sound::~Sound() = default;
-    void Sound::Play() {}
+    void Sound::Play(float) {}
     void Sound::Play3D(float, float, float, float, bool) {}
+    void Sound::PlayOneShot3D(float, float, float, float, float) {}
     void Sound::SetPosition(float, float, float) {}
     void Sound::SetVolume(float) {}
     void Sound::Pause() {}
     void Sound::Resume() {}
+    void Sound::SetGainLR(float, float) {}
+    void Sound::Stop() {}
 }
 #endif

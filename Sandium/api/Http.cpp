@@ -8,8 +8,11 @@
 
 namespace http
 {
-    std::string Get(const std::string &hostIn, uint16_t port, const std::string &path,
-                    int timeoutMs, const char *envOverride)
+    namespace
+    {
+    std::string Request(const char *method, const std::string &hostIn, uint16_t port,
+                        const std::string &path, const std::string &requestBody,
+                        int timeoutMs, const char *envOverride)
     {
     #if _WIN32
         std::string host = hostIn;
@@ -48,8 +51,12 @@ namespace http
         std::string body;
         if (connect(sock, res->ai_addr, (int)res->ai_addrlen) == 0)
         {
-            std::string req = "GET " + path + " HTTP/1.1\r\nHost: " + host +
-                              "\r\nConnection: close\r\n\r\n";
+            std::string req = std::string(method) + " " + path + " HTTP/1.1\r\nHost: " + host +
+                              "\r\nConnection: close\r\n";
+            if (!requestBody.empty())
+                req += "Content-Type: application/json\r\nContent-Length: " +
+                       std::to_string(requestBody.size()) + "\r\n";
+            req += "\r\n" + requestBody;
             send(sock, req.c_str(), (int)req.size(), 0);
 
             char buf[8192];
@@ -67,8 +74,23 @@ namespace http
         WSACleanup();
         return body;
     #else
-        (void)hostIn; (void)port; (void)path; (void)timeoutMs; (void)envOverride;
+        (void)method; (void)hostIn; (void)port; (void)path; (void)requestBody;
+        (void)timeoutMs; (void)envOverride;
         return "";
     #endif
+    }
+    }
+
+    std::string Get(const std::string &host, uint16_t port, const std::string &path,
+                    int timeoutMs, const char *envOverride)
+    {
+        return Request("GET", host, port, path, "", timeoutMs, envOverride);
+    }
+
+    std::string PostJson(const std::string &host, uint16_t port, const std::string &path,
+                         const std::string &jsonBody, int timeoutMs,
+                         const char *envOverride)
+    {
+        return Request("POST", host, port, path, jsonBody, timeoutMs, envOverride);
     }
 }

@@ -10,6 +10,7 @@ extern subhook::Hook *drawHUDHook;
 #include "../PainShader.hpp"
 #include "../CameraFX.hpp"
 #include "../GrainShader.hpp"
+#include "../Footsteps.hpp"
 #include "../RadioPlayer.hpp"
 #include "../CarRadioUI.hpp"
 
@@ -39,6 +40,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     carradio::Update();
     bettercrashes::Update();
     brokenbones::Update();
+    footsteps::Update();
     custommodels::UpdateRevolver();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");

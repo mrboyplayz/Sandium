@@ -6,6 +6,7 @@
 #include "api/Image.hpp"
 #include "api/Logging.hpp"
 #include "hooks/CreateItem.hpp"
+#include "ItemModels.hpp"
 #include "TypeManager.hpp"
 
 #include <glad/glad.h>
@@ -154,6 +155,8 @@ namespace custommodels
         api::GetSandiumLogger()->Log("Registered boombox tracking type with stable backing slot {}", boomboxBaseType);
     }
 
+    void LoadSavedGrip();
+
     void ConfigureRevolverType()
     {
         // The native table has been relocated to a 64-entry allocation, so the
@@ -165,20 +168,97 @@ namespace custommodels
         *typeID = revolverTypeID;
         addresses::ItemTypes[REVOLVER_TYPE].SetName("Revolver");
         addresses::ItemTypes[REVOLVER_TYPE].ammoCount = 6;
+        // hold the revolver like the 9mm: copy the 9mm's equip pose fields
+        // (hand offsets, grip drives, gun hold position) over the magnum
+        // defaults the clone started from
+        for (std::size_t i = 0; i < structs::ItemType::VanillaCount; ++i)
+        {
+            const std::string name = addresses::ItemTypes[i].GetName();
+            if (name.find("9mm") == std::string::npos && name.find("9MM") == std::string::npos)
+                continue;
+            const auto &src = addresses::ItemTypes[i];
+            auto &dst = addresses::ItemTypes[REVOLVER_TYPE];
+            dst.handCount = src.handCount;
+            dst.rightHandOffset = src.rightHandOffset;
+            dst.leftHandOffset = src.leftHandOffset;
+            dst.useAlternativeAim = src.useAlternativeAim;
+            dst.primaryGripStiffness = src.primaryGripStiffness;
+            dst.primaryGripRotation = src.primaryGripRotation;
+            dst.secondaryGripStiffness = src.secondaryGripStiffness;
+            dst.secondaryGripRotation = src.secondaryGripRotation;
+            dst.gunHoldPosition = src.gunHoldPosition;
+            // The 9mm grip offset is calibrated to the 9mm mesh; the custom
+            // revolver mesh's grip sits 0.075 further back (its centroid is at
+            // z -0.109 vs the 9mm's -0.035), so shift the hand back onto it.
+            dst.rightHandOffset = structs::CVector3(0.0f, 0.0571f, 0.1057f);
+            api::GetSandiumLogger()->Log("Revolver hold pose copied from item type {} ({})",
+                                         (int)i, name);
+            break;
+            LoadSavedGrip();
+        }
         GetItemTypeManager()->RegisterID("sandium", "revolver", REVOLVER_TYPE);
         revolverConfigured = true;
-        // The copied Magnum definition already owns valid native mesh/material
-        // pointers.  Keep those for the item-table expansion test; calling the
-        // CMO upload routine with ID 46 reaches a second fixed-size renderer
-        // allocation which still needs to be relocated separately.
-        revolverModelLoaded = true;
-        api::GetSandiumLogger()->Log(
-            "Registered sandium:revolver as native weapon type {} using inherited Magnum rendering",
-            REVOLVER_TYPE);
+        try
+        {
+            revolverModelLoaded = itemmodels::Set(
+                addresses::ItemTypes[REVOLVER_TYPE],
+                "sandium/models/revolver/revolver.cmo",
+                "sandium/models/revolver/TheGenerals451Tex.png");
+        }
+        catch (const std::exception &error)
+        {
+            revolverModelLoaded = false;
+            api::GetSandiumLogger()->Log("Revolver model error: {}", error.what());
+        }
+        api::GetSandiumLogger()->Log("Registered sandium:revolver as native weapon type {}",
+                                     REVOLVER_TYPE);
+    }
+
+    // live grip tuning: typing "grip <x> <y> <z>" in chat moves the right
+    // hand on the held revolver; the value persists in sandium_grip.txt and is
+    // re-applied on every launch until removed.
+    void ApplyGrip(float x, float y, float z)
+    {
+        addresses::ItemTypes[REVOLVER_TYPE].rightHandOffset = structs::CVector3(x, y, z);
+        if (std::FILE *f = std::fopen("sandium_grip.txt", "w"))
+        {
+            std::fprintf(f, "%.4f %.4f %.4f\n", x, y, z);
+            std::fclose(f);
+        }
+    }
+
+    void LoadSavedGrip()
+    {
+        if (std::FILE *f = std::fopen("sandium_grip.txt", "r"))
+        {
+            float x, y, z;
+            if (std::fscanf(f, "%f %f %f", &x, &y, &z) == 3)
+                addresses::ItemTypes[REVOLVER_TYPE].rightHandOffset = structs::CVector3(x, y, z);
+            std::fclose(f);
+        }
+    }
+
+    void CheckGripCommand()
+    {
+        static char lastCommand[61] = {};
+        const char *chat = reinterpret_cast<const char *>(
+            reinterpret_cast<const char *>(addresses::Base.ptr) + 0x404A6C + 4ULL * 283785913);
+        char lower[61];
+        std::size_t i = 0;
+        for (; i < 60 && chat[i]; ++i)
+            lower[i] = (char)tolower((unsigned char)chat[i]);
+        lower[i] = 0;
+        if (std::strcmp(lower, lastCommand) == 0)
+            return;
+        std::strncpy(lastCommand, lower, 60);
+        float x, y, z;
+        if (std::sscanf(lower, "grip %f %f %f", &x, &y, &z) == 3)
+            ApplyGrip(x, y, z);
     }
 
     void UpdateRevolver()
     {
+        CheckGripCommand();
         if (!revolverConfigured || !addresses::IsInGame.ptr)
             return;
 

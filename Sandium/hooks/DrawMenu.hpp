@@ -26,6 +26,7 @@ int DrawMenuHookFunc(int unk);
 
 #include "../Addon.hpp"
 #include "../Addresses.hpp"
+#include "../Gate.hpp"
 #include "../api/Text.hpp"
 #include "../structs/CSKeyboard.hpp"
 #include "../Version.hpp"
@@ -52,6 +53,10 @@ int DrawMenuHookFunc(int unk)
     }
 
     api::glcap::Prepare(); // first call happens with the GL context current
+
+    gate::UpdateAndDraw();
+    if (gate::Locked())
+        return 0; // gate UI replaces the menu until the password is accepted
 
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawMenu", "post");
@@ -123,6 +128,15 @@ int DrawMenuHookFunc(int unk)
 
         if (*addresses::MenuOptionsSectionID == 1)
         {
+            int fieldOfView = api::glcap::FieldOfView();
+            *addresses::NextMenuButtonPositionX = 4.0f;
+            *addresses::NextMenuButtonPositionY = 260.0f;
+            *addresses::NextMenuButtonSizeX = 240.0f;
+            *addresses::NextMenuButtonSizeY = 32.0f;
+            *addresses::NextMenuButtonKey = (SDL_Scancode)-1;
+            addresses::DrawMenuSliderFunc("Field of view", &fieldOfView, 60, 120, 5);
+            api::glcap::SetFieldOfView(fieldOfView);
+
             static int enableHDWater = 1;
             *addresses::NextMenuButtonPositionX = 4.0f;
             *addresses::NextMenuButtonPositionY = 120.0f + (32.0f * 3.5f) - 4.0f;
@@ -175,6 +189,25 @@ int DrawMenuHookFunc(int unk)
                 VirtualProtect((void *)(baseAddress + 0xC2B59), 5, oldProtect, &oldProtect);
 #endif
             }
+        }
+        else if (*addresses::MenuOptionsSectionID == 2)
+        {
+#if _WIN32
+            // Native config fields: voiceboost (percent) and its live gain.
+            // Sub Rosa already saves voiceboost to config.txt.
+            auto *voiceBoost = reinterpret_cast<int *>(
+                reinterpret_cast<std::uintptr_t>(addresses::Base.ptr) + 0x11E461DC);
+            auto *voiceGain = reinterpret_cast<float *>(
+                reinterpret_cast<std::uintptr_t>(addresses::Base.ptr) + 0x11E461E0);
+
+            *addresses::NextMenuButtonPositionX = 4.0f;
+            *addresses::NextMenuButtonPositionY = 376.0f;
+            *addresses::NextMenuButtonSizeX = 240.0f;
+            *addresses::NextMenuButtonSizeY = 32.0f;
+            *addresses::NextMenuButtonKey = (SDL_Scancode)-1;
+            addresses::DrawMenuSliderFunc("Mic input volume", voiceBoost, 13, 400, 10);
+            *voiceGain = glm::clamp(static_cast<float>(*voiceBoost) * 0.01f, 0.125f, 4.0f);
+#endif
         }
     }
     else if (*addresses::MenuTypeID >= 100) // 100 is the base ID for sandium menus

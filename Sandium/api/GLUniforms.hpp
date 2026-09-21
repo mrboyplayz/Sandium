@@ -15,6 +15,11 @@ namespace api
         // entry points and starts the background pointer scan.
         void Prepare();
 
+        // Sandium's configurable gameplay camera FOV. The value is persisted
+        // separately because stock Sub Rosa does not expose an FOV setting.
+        int FieldOfView();
+        void SetFieldOfView(int degrees);
+
         // Writes per-program capture state (upload counts, camera positions)
         // to sandium_glcap.txt for diagnosing wrong-pass captures.
         void DumpDiagnostics();

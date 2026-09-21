@@ -26,6 +26,7 @@ std::int64_t CSDrawTextHookFunc(const char *format, unsigned int flags, int a, i
 #include <sstream>
 
 #include "../Addresses.hpp"
+#include "../Gate.hpp"
 #include "../Roster.hpp"
 #include "../Version.hpp"
 
@@ -144,6 +145,8 @@ std::int64_t CSDrawTextHookFunc(const char *format, float x, float y, float size
     }
     else if (returnAddress == 0x966B4) // 0x966B4 is the instruction after the game renders the "connecting" text
     {
+        if (gate::Locked())
+            return 0; // the password gate replaces the connecting state
         return addresses::CSDrawTextFunc("Connecting...", x, y, size, newFlags, red, green, blue, alpha);
     }
 

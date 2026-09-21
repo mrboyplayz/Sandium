@@ -9,6 +9,7 @@
 #include "structs/Human.hpp"
 #include "structs/Item.hpp"
 #include "structs/ItemType.hpp"
+#include "structs/LineIntersectResult.hpp"
 #include "structs/Vehicle.hpp"
 #include "structs/VehicleType.hpp"
 
@@ -38,6 +39,19 @@ namespace addresses
 
     extern DataAddress<structs::CSKeyboard> CSKeyboard;
     extern DataAddress<structs::CSTexture> CSTextures;
+
+    // Native render-resource allocator. Model IDs index an 8192-entry mesh
+    // pool; the first 1024 also have dedicated texture-resource mappings.
+    extern DataAddress<int> ModelResourceCount;
+    extern DataAddress<int> ModelTextureResources;
+    // Renderer lookup indexed by item type ID. Unlike ItemType's legacy
+    // embedded mesh scratch space, this table addresses full model resources.
+    extern DataAddress<int> ItemModelResources;
+
+    extern DataAddress<structs::LineIntersectResult> LineIntersectResult;
+    extern DataAddress<int> LevelTextureCount;
+    // 184-byte entries; each entry starts with its texture name.
+    extern DataAddress<char> LevelTextureNames;
 
     extern DataAddress<float> SunAngle;
     extern DataAddress<unsigned int> SunTime;
@@ -72,11 +86,13 @@ namespace addresses
     using AttachItemFuncType = int (int itemID, int parentItemID, int humanID, int inventorySlotID);
     extern FuncAddress<AttachItemFuncType> AttachItemFunc;
 
-    using LoadCMOFuncType = std::uint64_t (int modelResourceID, int textureOverrideID, const char *name);
+    using LoadCMOFuncType = std::uint64_t (int modelResourceID, int itemTypeID, const char *name);
     extern FuncAddress<LoadCMOFuncType> LoadCMOFunc;
     using BindItemModelFuncType = void (int itemTypeID, int modelResourceID);
     extern FuncAddress<BindItemModelFuncType> BindItemModelFunc;
-    using LoadTextureFuncType = std::uint64_t (int textureResourceID, const char *path, int filtered, int format);
+    using LoadTextureFuncType = std::uint64_t (int textureResourceID, const char *path, int mipmapped,
+                                                int wrapS, int wrapT, int minFilter, int magFilter,
+                                                int reserved);
     extern FuncAddress<LoadTextureFuncType> LoadTextureFunc;
 
     // Native 0.38f audio mixer. Sounds are mono PCM resources; positioned
@@ -85,6 +101,13 @@ namespace addresses
     extern FuncAddress<RegisterSoundPCMFuncType> RegisterSoundPCMFunc;
     using PlayPositionedSoundFuncType = int (int soundID, const structs::CVector3 *position, float volume, float pitch, unsigned int loop);
     extern FuncAddress<PlayPositionedSoundFuncType> PlayPositionedSoundFunc;
+    using LineIntersectLevelFuncType = int (structs::CVector3 *start, structs::CVector3 *end,
+                                            int includeCityObjects);
+    extern FuncAddress<LineIntersectLevelFuncType> LineIntersectLevelFunc;
+    using SurfaceMaterialLookupFuncType = int (unsigned int areaID, unsigned int blockX,
+                                               unsigned int blockY, unsigned int blockZ,
+                                               int faceMaterialSlot);
+    extern FuncAddress<SurfaceMaterialLookupFuncType> SurfaceMaterialLookupFunc;
 
     using CreateVehicleFuncType = int (int typeID, structs::CVector3 *position, structs::CVector3 *velocity, structs::COrientation *orientation, int colorID);
     extern FuncAddress<CreateVehicleFuncType> CreateVehicleFunc;
