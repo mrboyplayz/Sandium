@@ -1,13 +1,16 @@
 #include "CarRadioUI.hpp"
 
 #include "Addresses.hpp"
+#include "api/GLUniforms.hpp"
 #include "api/Image.hpp"
 #include "api/Text.hpp"
 #include "structs/Human.hpp"
+#include "structs/Vehicle.hpp"
 
 #include <glad/glad.h>
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -69,15 +72,50 @@ namespace carradio
             return fn ? fn(nullptr) : nullptr;
         }
 
-        bool InVehicle()
+        const structs::Human *LocalHuman()
         {
+            if (!addresses::Humans.ptr || !api::glcap::HasViewPosition())
+                return nullptr;
+            const float *camera = api::glcap::ViewPosition();
+            if (!camera)
+                return nullptr;
+
+            const structs::Human *closest = nullptr;
+            float closestDistanceSquared = (std::numeric_limits<float>::max)();
             for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
             {
-                if (!addresses::Humans[h].isActive.b1)
+                const structs::Human &human = addresses::Humans[h];
+                if (!human.isActive.b1)
                     continue;
-                return addresses::Humans[h].vehicleID >= 0;
+                const float dx = human.position.x - camera[0];
+                const float dy = human.position.y - camera[1];
+                const float dz = human.position.z - camera[2];
+                const float distanceSquared = dx * dx + dy * dy + dz * dz;
+                if (distanceSquared < closestDistanceSquared)
+                {
+                    closest = &human;
+                    closestDistanceSquared = distanceSquared;
+                }
             }
-            return false;
+
+            // A normal first/third-person camera remains near its controlled
+            // human. Fail closed for free cameras and spectator views.
+            return closestDistanceSquared <= 225.0f ? closest : nullptr;
+        }
+
+        int LocalVehicleID()
+        {
+            const structs::Human *human = LocalHuman();
+            if (!human || human->vehicleID < 0 ||
+                human->vehicleID >= static_cast<int>(structs::Vehicle::VanillaCount) ||
+                !addresses::Vehicles.ptr || !addresses::Vehicles[human->vehicleID].isActive.b1)
+                return -1;
+            return human->vehicleID;
+        }
+
+        bool InVehicle()
+        {
+            return LocalVehicleID() >= 0;
         }
 
         void SetCursorFree(bool free_)
@@ -107,34 +145,27 @@ namespace carradio
         {
             if (textLen == 0)
                 return;
-            // local human's vehicle index
-            for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
-            {
-                if (!addresses::Humans[h].isActive.b1)
-                    continue;
-                const int vid = addresses::Humans[h].vehicleID;
-                if (vid < 0)
-                    return;
+            const int vid = LocalVehicleID();
+            if (vid < 0)
+                return;
 
-                SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-                if (sock == INVALID_SOCKET)
-                    return;
-                DWORD timeout = 3000;
-                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-                setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
-                sockaddr_in addr{};
-                addr.sin_family = AF_INET;
-                addr.sin_port = htons(28000);
-                addr.sin_addr.s_addr = inet_addr("185.227.111.150");
-                if (connect(sock, (sockaddr *)&addr, sizeof(addr)) == 0)
-                {
-                    char packet[600];
-                    std::snprintf(packet, sizeof(packet), "radio %d %s", vid, text);
-                    send(sock, packet, (int)strlen(packet), 0);
-                }
-                closesocket(sock);
-                break;
+            SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (sock == INVALID_SOCKET)
+                return;
+            DWORD timeout = 3000;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+            sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_port = htons(28000);
+            addr.sin_addr.s_addr = inet_addr("185.227.111.150");
+            if (connect(sock, (sockaddr *)&addr, sizeof(addr)) == 0)
+            {
+                char packet[600];
+                std::snprintf(packet, sizeof(packet), "radio %d %s", vid, text);
+                send(sock, packet, (int)strlen(packet), 0);
             }
+            closesocket(sock);
             textLen = 0;
             text[0] = 0;
             focused = false;
@@ -326,6 +357,8 @@ namespace carradio
 
         if (textLen > 0)
         {
+            if (focused && (int)(blinkTime * 2.0f) % 2 == 0)
+                visibleText += '|';
             api::QueueText(visibleText, BOX_X + 5.0f, BOX_Y + 4.0f, 9.0f,
                            glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
         }
@@ -335,9 +368,10 @@ namespace carradio
                            glm::vec4(0.42f, 0.46f, 0.48f, 1.0f), api::TextAlignment::Right, true);
         }
 
-        // focus caret
-        if (focused && (int)(blinkTime * 2.0f) % 2 == 0)
-            api::QueueText(std::string("|"), BOX_X + 5.0f + visibleText.size() * 4.35f, BOX_Y + 4.0f, 9.0f,
+        // With no text, draw the caret at the field origin. Once text exists it
+        // is appended above so the native renderer supplies exact glyph widths.
+        if (focused && textLen == 0 && (int)(blinkTime * 2.0f) % 2 == 0)
+            api::QueueText(std::string("|"), BOX_X + 5.0f, BOX_Y + 4.0f, 9.0f,
                            glm::vec4(1.0f, 1.0f, 1.0f, 1.0f), api::TextAlignment::Right, true);
 
         // The native SDL cursor is used while unlocked. Drawing a second text

@@ -33,7 +33,8 @@ namespace radioplayer
         // MP3 as a native 3D sample decodes the entire song on DrawHUD, which
         // stalls rendering during joins.  Stereo gain/pan below provides a
         // stable car-relative source without touching native source internals.
-        constexpr float AUDIBLE_RADIUS = 28.0f;
+        constexpr float AUDIBLE_RADIUS = 20.0f;
+        constexpr float RADIO_VOLUME = 0.45f;
 
         constexpr int DOWNLOAD_RETRY_FRAMES = 300;
 
@@ -147,6 +148,69 @@ namespace radioplayer
                 return;
             std::thread(DecodeThread, downloadName).detach();
         }
+
+        void ApplyPositionalGain()
+        {
+            if (!current)
+                return;
+            if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
+                !addresses::Vehicles[currentVehicle].isActive.b1)
+            {
+                current->Stop();
+                current.reset();
+                return;
+            }
+
+            // The renderer's view position belongs to this client. Using the
+            // first active Human can select a remote player in multiplayer and
+            // make a distant car sound local.
+            if (!api::glcap::HasViewPosition())
+            {
+                current->SetGainLR(0.0f, 0.0f);
+                return;
+            }
+            const float *listener = api::glcap::ViewPosition();
+            if (!listener)
+            {
+                current->SetGainLR(0.0f, 0.0f);
+                return;
+            }
+
+            const structs::Vehicle &car = addresses::Vehicles[currentVehicle];
+            const float dx = car.position.x - listener[0];
+            const float dy = car.position.y - listener[1];
+            const float dz = car.position.z - listener[2];
+            const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+            float atten = 1.0f - dist / AUDIBLE_RADIUS;
+            if (atten <= 0.0f)
+            {
+                current->SetGainLR(0.0f, 0.0f);
+                return;
+            }
+            atten *= atten;
+
+            float pan = 0.0f;
+            if (api::glcap::HasLastView())
+            {
+                const float *view = api::glcap::LastViewMatrix();
+                float right[3];
+                if (api::glcap::LastViewTransposed())
+                {
+                    right[0] = view[0]; right[1] = view[4]; right[2] = view[8];
+                }
+                else
+                {
+                    right[0] = view[0]; right[1] = view[1]; right[2] = view[2];
+                }
+                const float length = dist > 0.001f ? dist : 1.0f;
+                pan = std::clamp((dx * right[0] + dy * right[1] + dz * right[2]) / length,
+                                 -1.0f, 1.0f);
+            }
+
+            const float left = pan > 0.0f ? 1.0f - pan : 1.0f;
+            const float right = pan < 0.0f ? 1.0f + pan : 1.0f;
+            current->SetGainLR(atten * left, atten * right);
+        }
     }
 
     void Update()
@@ -230,77 +294,28 @@ namespace radioplayer
             }
             if (ready)
             {
-            try
-            {
-                if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
-                    !addresses::Vehicles[currentVehicle].isActive.b1)
-                    throw std::runtime_error("radio vehicle is no longer active");
-                current = std::move(ready);
-                current->Play(1.0f);
-                api::GetSandiumLogger()->Log("Radio playing {} on vehicle {}", downloadName, currentVehicle);
-                downloadName.clear();
-            }
-            catch (const std::exception &error)
-            {
-                api::GetSandiumLogger()->Log("<red>Radio playback failed: {}", error.what());
-                current.reset();
-                downloadName.clear();
-            }
+                try
+                {
+                    if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
+                        !addresses::Vehicles[currentVehicle].isActive.b1)
+                        throw std::runtime_error("radio vehicle is no longer active");
+                    current = std::move(ready);
+                    current->Play(RADIO_VOLUME);
+                    ApplyPositionalGain();
+                    api::GetSandiumLogger()->Log("Radio playing {} on vehicle {}", downloadName, currentVehicle);
+                    downloadName.clear();
+                }
+                catch (const std::exception &error)
+                {
+                    api::GetSandiumLogger()->Log("<red>Radio playback failed: {}", error.what());
+                    current.reset();
+                    downloadName.clear();
+                }
             }
         }
 
         // positional gains from the car
-        if (!current)
-            return;
-        if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
-            !addresses::Vehicles[currentVehicle].isActive.b1)
-        {
-            current->Stop();
-            current.reset();
-            return;
-        }
-        // View-position uniforms may belong to a reflection/shadow pass.
-        // The player's replicated human position is the stable listener
-        // location to use for the radio's distance cutoff.
-        const structs::Human *listener = nullptr;
-        for (std::size_t humanID = 0; humanID < structs::Human::VanillaCount; ++humanID)
-            if (addresses::Humans[humanID].isActive.b1)
-            {
-                listener = &addresses::Humans[humanID];
-                break;
-            }
-        if (!listener || !api::glcap::HasLastView())
-            return;
-
-        const structs::Vehicle &car = addresses::Vehicles[currentVehicle];
-        const float dx = car.position.x - listener->position.x;
-        const float dy = car.position.y - listener->position.y;
-        const float dz = car.position.z - listener->position.z;
-        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-        float atten = 1.0f - dist / AUDIBLE_RADIUS;
-        if (atten <= 0.0f)
-        {
-            current->SetGainLR(0.0f, 0.0f);
-            return;
-        }
-        atten *= atten;
-
-        // Pan against the camera's right vector so the radio tracks the car
-        // as it moves around the listener rather than sounding screen-fixed.
-        const float *view = api::glcap::LastViewMatrix();
-        float right[3];
-        if (api::glcap::LastViewTransposed())
-        {
-            right[0] = view[0]; right[1] = view[4]; right[2] = view[8];
-        }
-        else
-        {
-            right[0] = view[0]; right[1] = view[1]; right[2] = view[2];
-        }
-        const float length = dist > 0.001f ? dist : 1.0f;
-        const float pan = (dx * right[0] + dy * right[1] + dz * right[2]) / length;
-        current->SetGainLR(atten * (0.5f - 0.50f * pan),
-                           atten * (0.5f + 0.50f * pan));
+        ApplyPositionalGain();
 #endif
     }
 

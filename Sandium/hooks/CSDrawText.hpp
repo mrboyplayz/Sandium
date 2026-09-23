@@ -136,8 +136,8 @@ std::int64_t CSDrawTextHookFunc(const char *format, float x, float y, float size
     else if (returnAddress == 0xFCFD2)
     {
         // The last credits menu section is being drawn!
-        addresses::CSDrawTextFunc("Sandium is made by", x, y + 64, size, newFlags, 1.0f, 0.0f, 0.0f, 1.0f);
-        addresses::CSDrawTextFunc("JPXS", x + 120, y + 64, size, newFlags, 1.0f, 0.75f, 0.0f, 1.0f);
+        addresses::CSDrawTextFunc("Sandium is a fork from Suitium", x, y + 64, size, newFlags, 1.0f, 0.0f, 0.0f, 1.0f);
+        addresses::CSDrawTextFunc("Sandium was made by CROW and Kar", x, y + 84, size, newFlags, 1.0f, 0.75f, 0.0f, 1.0f);
     }
     else if (returnAddress == 0x9658E) // 0x9658E is the instruction after the game renders the "generating" text
     {
@@ -179,8 +179,8 @@ std::int64_t CSDrawTextHookFunc(const char *format, unsigned int flags, int a, i
     else if (returnAddress == 0x8D488)
     {
         // The last credits menu section is being drawn!
-        addresses::CSDrawTextFunc("Sandium is made by", flags, a, b, x, y + 64, scale, 1.0f, 0.0f, 0.0f, 1.0f, c);
-        addresses::CSDrawTextFunc("JPXS", flags, a, b, x + 120, y + 64, scale, 1.0f, 0.75f, 0.0f, 1.0f, c);
+        addresses::CSDrawTextFunc("Sandium is a fork from Suitium", x, y + 64, size, newFlags, 1.0f, 0.0f, 0.0f, 1.0f);
+        addresses::CSDrawTextFunc("Sandium was made by CROW and Kar", x, y + 84, size, newFlags, 1.0f, 0.75f, 0.0f, 1.0f);
     }
     else if (returnAddress == 0x15759D)
     {

@@ -283,21 +283,6 @@ namespace api
         sound->impl->reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
         sound->impl->reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM, TRUE);
 
-        IMFMediaType *audioType = nullptr;
-        if (FAILED(MFCreateMediaType(&audioType)))
-            throw std::runtime_error("Could not create audio media type");
-        audioType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-        audioType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
-        audioType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, 48000);
-        audioType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
-        audioType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 32);
-        audioType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 8);
-        audioType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 48000 * 8);
-        result = sound->impl->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, audioType);
-        SndRelease(audioType);
-        if (FAILED(result))
-            throw std::runtime_error("Could not decode audio in: " + path);
-
         IMMDeviceEnumerator *enumerator = nullptr;
         IMMDevice *device = nullptr;
         WAVEFORMATEX *mixFormat = nullptr;
@@ -321,8 +306,36 @@ namespace api
             SndRelease(enumerator);
             throw std::runtime_error("Could not initialize audio output for: " + path);
         }
-        if (mixFormat)
-            sound->impl->outputChannels = mixFormat->nChannels ? mixFormat->nChannels : 2;
+        sound->impl->outputChannels = mixFormat->nChannels ? mixFormat->nChannels : 2;
+        const UINT32 outputSampleRate = mixFormat->nSamplesPerSec;
+
+        // Decode at the endpoint's actual clock rate. Feeding fixed 48 kHz
+        // samples to a 96 kHz shared-mode endpoint plays audio at double speed.
+        IMFMediaType *audioType = nullptr;
+        if (FAILED(MFCreateMediaType(&audioType)))
+        {
+            CoTaskMemFree(mixFormat);
+            SndRelease(device);
+            SndRelease(enumerator);
+            throw std::runtime_error("Could not create audio media type");
+        }
+        audioType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+        audioType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
+        audioType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, outputSampleRate);
+        audioType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, 2);
+        audioType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 32);
+        audioType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 8);
+        audioType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, outputSampleRate * 8);
+        result = sound->impl->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, audioType);
+        SndRelease(audioType);
+        if (FAILED(result))
+        {
+            CoTaskMemFree(mixFormat);
+            SndRelease(device);
+            SndRelease(enumerator);
+            throw std::runtime_error("Could not decode audio in: " + path);
+        }
+
         if (mixFormat)
             CoTaskMemFree(mixFormat);
         SndRelease(device);
