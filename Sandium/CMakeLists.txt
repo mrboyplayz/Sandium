@@ -49,8 +49,6 @@ add_library(
     PainShader.cpp
     GrainShader.cpp
     CameraFX.cpp
-    RadioPlayer.cpp
-    CarRadioUI.cpp
     api/Sound.cpp
     TypeManager.cpp
     Version.cpp

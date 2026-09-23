@@ -11,8 +11,6 @@ extern subhook::Hook *drawHUDHook;
 #include "../CameraFX.hpp"
 #include "../GrainShader.hpp"
 #include "../Footsteps.hpp"
-#include "../RadioPlayer.hpp"
-#include "../CarRadioUI.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -36,8 +34,6 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     subhook::ScopedHookRemove scopedRemove(drawHUDHook);
     painshader::Update();
     // Pain camera effects, shaders, and debug stats are disabled for now.
-    radioplayer::Update();
-    carradio::Update();
     bettercrashes::Update();
     brokenbones::Update();
     footsteps::Update();
@@ -46,7 +42,6 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();
-    carradio::Draw();
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
     addresses::DrawHUDFunc(a, b, c, d);
