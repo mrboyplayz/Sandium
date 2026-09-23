@@ -42,6 +42,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     brokenbones::Update();
     footsteps::Update();
     custommodels::UpdateRevolver();
+    custommodels::UpdateM9Bayonet();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();

@@ -86,6 +86,15 @@ namespace addresses
     using AttachItemFuncType = int (int itemID, int parentItemID, int humanID, int inventorySlotID);
     extern FuncAddress<AttachItemFuncType> AttachItemFunc;
 
+    // IDA 9.3: sub_1400B1450. Native three-bone limb IK solver.
+    using HumanLimbIKFuncType = std::int64_t (
+        int humanID, int trunkBoneID, int branchBoneID,
+        structs::CVector3 *destination, float *destinationAxis,
+        structs::CVector3 *vectorA, float reach, std::uint32_t rotationBits,
+        void *quaternion, std::uint32_t *vectorB, std::uint32_t *vectorC,
+        std::uint32_t *vectorD, float maximumAngle, char flags);
+    extern FuncAddress<HumanLimbIKFuncType> HumanLimbIKFunc;
+
     using LoadCMOFuncType = std::uint64_t (int modelResourceID, int itemTypeID, const char *name);
     extern FuncAddress<LoadCMOFuncType> LoadCMOFunc;
     using BindItemModelFuncType = void (int itemTypeID, int modelResourceID);

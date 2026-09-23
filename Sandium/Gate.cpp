@@ -6,9 +6,14 @@
 
 #include <Windows.h>
 #include <bcrypt.h>
+#include <wincrypt.h>
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -38,6 +43,195 @@ namespace gate
         std::string status = "Enter the password to unlock the game.";
         int statusFrames = 0;
         int attempts = 0;
+        bool rememberChecked = false;
+        std::string masterSession;
+
+        std::string ExeDirectory()
+        {
+            char path[MAX_PATH] = {};
+            const DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+            if (length == 0 || length >= MAX_PATH)
+                return ".";
+            std::string result(path, length);
+            const std::size_t slash = result.find_last_of("\\/");
+            return slash == std::string::npos ? "." : result.substr(0, slash);
+        }
+
+        std::string LocalAppDataRememberPath()
+        {
+            const char *localAppData = std::getenv("LOCALAPPDATA");
+            std::string base = localAppData && *localAppData ? localAppData : ".";
+            std::string dir = base + "\\Sandium";
+            CreateDirectoryA(dir.c_str(), nullptr);
+            return dir + "\\gate_remember.txt";
+        }
+
+        std::string ExeRememberPath()
+        {
+            return ExeDirectory() + "\\sandium_gate_remember.txt";
+        }
+
+        std::array<std::string, 2> RememberPaths()
+        {
+            return {ExeRememberPath(), LocalAppDataRememberPath()};
+        }
+
+        std::time_t NowSeconds()
+        {
+            return std::time(nullptr);
+        }
+
+        void ForgetRememberedUnlock()
+        {
+            for (const auto &path : RememberPaths())
+                DeleteFileA(path.c_str());
+        }
+
+        std::string BytesToHexString(const unsigned char *bytes, std::size_t size)
+        {
+            static const char digits[] = "0123456789abcdef";
+            std::string result(size * 2, '0');
+            for (std::size_t i = 0; i < size; ++i)
+            {
+                result[i * 2] = digits[bytes[i] >> 4];
+                result[i * 2 + 1] = digits[bytes[i] & 15];
+            }
+            return result;
+        }
+
+        bool HexStringToBytes(const std::string &hex, std::vector<unsigned char> &bytes)
+        {
+            if (hex.size() % 2 != 0)
+                return false;
+            bytes.clear();
+            bytes.reserve(hex.size() / 2);
+            for (std::size_t i = 0; i < hex.size(); i += 2)
+            {
+                char pair[3] = {hex[i], hex[i + 1], 0};
+                char *end = nullptr;
+                unsigned long value = strtoul(pair, &end, 16);
+                if (!end || *end != '\0')
+                    return false;
+                bytes.push_back(static_cast<unsigned char>(value));
+            }
+            return true;
+        }
+
+        std::string ProtectRememberPayload(long long expiry, const std::string &session)
+        {
+            const std::string payload = "sandium-gate-v3 " + std::to_string(expiry) + " " + session;
+            DATA_BLOB input{};
+            input.pbData = reinterpret_cast<BYTE *>(const_cast<char *>(payload.data()));
+            input.cbData = static_cast<DWORD>(payload.size());
+            DATA_BLOB output{};
+            if (!CryptProtectData(&input, L"Sandium gate remember", nullptr, nullptr, nullptr,
+                                  CRYPTPROTECT_UI_FORBIDDEN, &output))
+                return "";
+            std::string hex = BytesToHexString(output.pbData, output.cbData);
+            LocalFree(output.pbData);
+            return hex;
+        }
+
+        bool UnprotectRememberPayload(const std::string &hex, long long &expiry,
+                                      std::string &session)
+        {
+            std::vector<unsigned char> protectedBytes;
+            if (!HexStringToBytes(hex, protectedBytes) || protectedBytes.empty())
+                return false;
+            DATA_BLOB input{};
+            input.pbData = protectedBytes.data();
+            input.cbData = static_cast<DWORD>(protectedBytes.size());
+            DATA_BLOB output{};
+            if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
+                                    CRYPTPROTECT_UI_FORBIDDEN, &output))
+                return false;
+            std::string payload(reinterpret_cast<char *>(output.pbData), output.cbData);
+            LocalFree(output.pbData);
+            std::string magic;
+            std::istringstream stream(payload);
+            return (stream >> magic >> expiry >> session) && magic == "sandium-gate-v3" &&
+                   session.size() == 32;
+        }
+
+        bool LoadRememberedUnlock()
+        {
+            for (const auto &path : RememberPaths())
+            {
+                std::ifstream file(path, std::ios::in);
+                std::string magic;
+                long long expiry = 0;
+                if (!(file >> magic))
+                    continue;
+                std::string rememberedSession;
+                if (magic == "sandium-gate-v3")
+                {
+                    std::string protectedHex;
+                    file >> protectedHex;
+                    if (!UnprotectRememberPayload(protectedHex, expiry, rememberedSession))
+                        continue;
+                }
+                else
+                    continue;
+                if (expiry <= static_cast<long long>(NowSeconds()))
+                {
+                    ForgetRememberedUnlock();
+                    return false;
+                }
+
+                // A remember token is only valid while the same master process
+                // is alive and its in-memory IP authorization is still active.
+                // Any master restart produces a new session ID and forces the
+                // password prompt on the client's next gate check.
+                using Json = nlohmann::json;
+                const std::string body = http::Get(MASTER_HOST, MASTER_PORT,
+                                                   "/gate/status", 4000);
+                Json remote = Json::parse(body, nullptr, false);
+                if (remote.is_discarded() || !remote.value("authorized", false) ||
+                    remote.value("session", "") != rememberedSession)
+                {
+                    ForgetRememberedUnlock();
+                    api::GetSandiumLogger()->Log(
+                        "Password gate discarded stale remembered unlock");
+                    return false;
+                }
+                masterSession = rememberedSession;
+                api::GetSandiumLogger()->Log("Password gate remembered unlock from {}", path);
+                return true;
+            }
+            return false;
+        }
+
+        void SaveRememberedUnlock()
+        {
+            constexpr long long THREE_DAYS = 3LL * 24LL * 60LL * 60LL;
+            const long long expiry = static_cast<long long>(NowSeconds()) + THREE_DAYS;
+            const std::string protectedHex = ProtectRememberPayload(expiry, masterSession);
+            bool wrote = false;
+            for (const auto &path : RememberPaths())
+            {
+                std::ofstream file(path, std::ios::out | std::ios::trunc);
+                if (file && !protectedHex.empty())
+                {
+                    file << "sandium-gate-v3 " << protectedHex << "\n";
+                    wrote = true;
+                    api::GetSandiumLogger()->Log("Password gate saved remembered unlock to {}", path);
+                }
+            }
+            if (!wrote)
+                api::GetSandiumLogger()->Log("<red>Password gate could not save remembered unlock");
+        }
+
+        void EnsureRememberChecked()
+        {
+            if (rememberChecked)
+                return;
+            rememberChecked = true;
+            if (LoadRememberedUnlock())
+            {
+                state = State::Open;
+                api::GetSandiumLogger()->Log("Password gate opened from remembered unlock");
+            }
+        }
 
         bool KeyPressed(int vk)
         {
@@ -200,7 +394,7 @@ namespace gate
             Json challenge = Json::parse(body, nullptr, false);
             if (challenge.is_discarded() || !challenge.contains("id") ||
                 !challenge.contains("salt") || !challenge.contains("nonce") ||
-                !challenge.contains("iterations"))
+                !challenge.contains("iterations") || !challenge.contains("session"))
             {
                 status = "Cannot reach the password service. Try again.";
                 statusFrames = 180;
@@ -209,8 +403,10 @@ namespace gate
 
             std::vector<unsigned char> salt, nonce;
             std::string id = challenge.value("id", "");
+            const std::string challengeSession = challenge.value("session", "");
             if (id.size() != 32 || !HexToBytes(challenge.value("salt", ""), salt) ||
-                !HexToBytes(challenge.value("nonce", ""), nonce))
+                !HexToBytes(challenge.value("nonce", ""), nonce) ||
+                challengeSession.size() != 32)
             {
                 status = "Password service returned an invalid challenge.";
                 statusFrames = 180;
@@ -229,8 +425,12 @@ namespace gate
             Json response = Json::parse(
                 http::PostJson(MASTER_HOST, MASTER_PORT, LOGIN_PATH, request.dump(), 4000),
                 nullptr, false);
-            if (!response.is_discarded() && response.value("ok", false))
+            if (!response.is_discarded() && response.value("ok", false) &&
+                response.value("session", "") == challengeSession)
+            {
+                masterSession = challengeSession;
                 return true;
+            }
 
             status = "Wrong password or too many attempts.";
             statusFrames = 180;
@@ -247,16 +447,19 @@ namespace gate
 
     bool Locked()
     {
+        EnsureRememberChecked();
         return state != State::Open;
     }
 
     bool ShouldBlockConnect()
     {
+        EnsureRememberChecked();
         return state != State::Open;
     }
 
     void UpdateAndDraw()
     {
+        EnsureRememberChecked();
         if (state == State::Open)
             return;
 
@@ -269,6 +472,7 @@ namespace gate
             if (Verify(entered))
             {
                 state = State::Open;
+                SaveRememberedUnlock();
                 api::GetSandiumLogger()->Log("Password gate opened");
                 return;
             }

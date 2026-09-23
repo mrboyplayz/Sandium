@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sandium Pose Editor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #11161b;
+      color: #eef3f8;
+    }
+    body {
+      margin: 0;
+      display: grid;
+      grid-template-columns: 290px 1fr 410px;
+      height: 100vh;
+      overflow: hidden;
+    }
+    aside, section {
+      border-right: 1px solid #2a3440;
+      background: #151b22;
+      min-height: 0;
+    }
+    h1, h2 {
+      font-size: 15px;
+      margin: 0;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid #2a3440;
+    }
+    .bones {
+      padding: 10px;
+      overflow: auto;
+      height: calc(100vh - 50px);
+    }
+    .bone {
+      display: block;
+      width: 100%;
+      border: 0;
+      text-align: left;
+      color: #dce7f1;
+      background: transparent;
+      padding: 7px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .bone:hover { background: #202b36; }
+    .bone.active { background: #315f95; color: white; }
+    .bone .idx { color: #8ea2b5; display: inline-block; width: 24px; }
+    main {
+      position: relative;
+      background: radial-gradient(circle at 50% 35%, #263340, #101418 70%);
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .hint {
+      position: absolute;
+      left: 14px;
+      bottom: 12px;
+      color: #a9b8c6;
+      font-size: 13px;
+      background: rgba(0,0,0,.28);
+      padding: 7px 9px;
+      border-radius: 5px;
+    }
+    .panel {
+      overflow: auto;
+      height: 100vh;
+      border-right: 0;
+    }
+    .group {
+      padding: 12px 14px;
+      border-bottom: 1px solid #2a3440;
+    }
+    label {
+      display: block;
+      color: #adc0d1;
+      font-size: 12px;
+      margin: 0 0 5px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    input, select, textarea, button {
+      box-sizing: border-box;
+      width: 100%;
+      background: #0e1318;
+      color: #edf4fa;
+      border: 1px solid #334454;
+      border-radius: 5px;
+      padding: 8px;
+      font: 13px "Consolas", "Segoe UI", monospace;
+    }
+    button {
+      cursor: pointer;
+      background: #203040;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    button:hover { background: #2b4055; }
+    .buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    textarea {
+      min-height: 215px;
+      resize: vertical;
+      white-space: pre;
+    }
+    .small {
+      color: #8fa1b3;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Sandium Pose Editor</h1>
+    <div id="bones" class="bones"></div>
+  </aside>
+  <main>
+    <canvas id="view"></canvas>
+    <div class="hint">Drag = orbit, wheel = zoom. Click a bone in the list, edit fields, export.</div>
+  </main>
+  <section class="panel">
+    <h2 id="selectedTitle">Bone</h2>
+    <div class="group">
+      <label>Rotation degrees</label>
+      <div class="row">
+        <input id="rx" type="number" step="1">
+        <input id="ry" type="number" step="1">
+        <input id="rz" type="number" step="1">
+      </div>
+      <label>Position offset</label>
+      <div class="row">
+        <input id="px" type="number" step="0.01">
+        <input id="py" type="number" step="0.01">
+        <input id="pz" type="number" step="0.01">
+      </div>
+      <div class="buttons">
+        <button id="zeroBone">Zero Bone</button>
+        <button id="mirror">Mirror L/R</button>
+      </div>
+    </div>
+    <div class="group">
+      <label>Pose Slot</label>
+      <select id="slot">
+        <option value="idle">idle</option>
+        <option value="stab">stab</option>
+      </select>
+      <div class="buttons" style="margin-top:8px">
+        <button id="copyIdleToStab">Idle → Stab</button>
+        <button id="zeroAll">Zero All</button>
+      </div>
+    </div>
+    <div class="group">
+      <label>Item Attach</label>
+      <div class="row">
+        <input id="itemBone" type="number" min="0" max="15">
+        <input id="itemX" type="number" step="0.01">
+        <input id="itemY" type="number" step="0.01">
+      </div>
+      <div class="row">
+        <input id="itemZ" type="number" step="0.01">
+        <input id="itemRX" type="number" step="1">
+        <input id="itemRY" type="number" step="1">
+      </div>
+      <div class="row">
+        <input id="itemRZ" type="number" step="1">
+        <button id="knifePreset">Knife Idle</button>
+        <button id="stabPreset">Knife Stab</button>
+      </div>
+    </div>
+    <div class="group">
+      <div class="buttons">
+        <button id="exportCpp">Export C++</button>
+        <button id="exportLua">Export Lua</button>
+      </div>
+      <div class="buttons" style="margin-top:8px">
+        <button id="saveJson">Save JSON</button>
+        <button id="loadJson">Load JSON</button>
+      </div>
+      <input id="fileInput" type="file" accept=".json" style="display:none">
+      <p class="small">Export includes per-bone rotation degrees, position offsets, and item attach transform for both idle and stab.</p>
+      <textarea id="out" spellcheck="false"></textarea>
+    </div>
+  </section>
+  <script src="pose_editor.js"></script>
+</body>
+</html>

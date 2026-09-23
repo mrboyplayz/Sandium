@@ -1,6 +1,7 @@
 #include "CustomModels.hpp"
 
 #include "Addresses.hpp"
+#include "Flags.hpp"
 #include "GeneratedBoomboxModel.hpp"
 #include "api/GLUniforms.hpp"
 #include "api/Image.hpp"
@@ -14,10 +15,15 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <subhook.h>
 
+#if _WIN32
+#include <Windows.h>
+#endif
+
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace custommodels
@@ -38,12 +44,47 @@ namespace custommodels
         std::array<bool, structs::Item::VanillaCount> boomboxItems{};
 
         constexpr int REVOLVER_TYPE = 46; // first genuinely expanded item slot
+        constexpr int M9_BAYONET_TYPE = 47;
         constexpr int MAGNUM_TYPE = 5;
+        constexpr int NINE_MM_TYPE = 11;
         bool revolverConfigured = false;
         bool revolverModelLoaded = false;
         bool revolverSpawned = false;
         bool revolverWasInGame = false;
         std::string revolverTypeID = "sandium:revolver";
+        bool m9Configured = false;
+        bool m9ModelLoaded = false;
+        bool m9Spawned = false;
+        bool m9WasInGame = false;
+        bool m9SpawnRequested = false;
+        float m9StabBlend = 0.0f;
+        std::string m9TypeID = "sandium:m9_bayonet";
+        // Item origin sits at hand + this offset; the flipped mesh's handle
+        // straddles z -0.057..+0.037 (center ~-0.01), so z ~+0.01 seats the
+        // handle in the fist instead of floating the blade ahead of it.
+        constexpr float M9_IDLE_ITEM_POS[3] = {0.02f, -0.03f, 0.01f};
+        constexpr float M9_STAB_ITEM_POS[3] = {-0.01f, 0.01f, 0.46f};
+
+        bool ParseM9GripFlag(const std::string &value, structs::CVector3 &grip)
+        {
+            float x = 0.0f, y = 0.0f, z = 0.0f;
+            if (std::sscanf(value.c_str(), "%f %f %f", &x, &y, &z) != 3)
+                return false;
+            grip = structs::CVector3(x, y, z);
+            return true;
+        }
+        constexpr float M9_IDLE_BONE_ROT_DEG[16][3] = {
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {40.0f, -20.0f, 0.0f},
+            {0.0f, -10.0f, 0.0f}, {0.0f, -28.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+        };
+        constexpr float M9_STAB_BONE_ROT_DEG[16][3] = {
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {40.0f, -40.0f, -6.0f},
+            {-8.0f, -50.0f, -5.0f}, {0.0f, -20.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+            {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f},
+        };
 
         GLuint Compile(GLenum type, const char *source)
         {
@@ -214,6 +255,68 @@ namespace custommodels
                                      REVOLVER_TYPE);
     }
 
+    // live M9 tuning: "m9grip <x> <y> <z>" moves the knife on the hand,
+    // "m9rot <deg>" twists it; both persist in sandium_m9grip.txt.
+    // (Forward declarations; definitions follow CheckM9Command.)
+    void ApplyM9Grip(float x, float y, float z);
+    void ApplyM9GripRotation(float r);
+    void LoadSavedM9Grip();
+
+    void ConfigureM9BayonetType()
+    {
+        auto *typeID = addresses::ItemTypes[M9_BAYONET_TYPE].customData.typeIDPtr;
+        addresses::ItemTypes[M9_BAYONET_TYPE] = addresses::ItemTypes[NINE_MM_TYPE];
+        auto &definition = addresses::ItemTypes[M9_BAYONET_TYPE];
+        definition.customData.index = M9_BAYONET_TYPE;
+        definition.customData.typeIDPtr = typeID;
+        *typeID = m9TypeID;
+        definition.SetName("M9 Bayonet");
+        definition.isGun = {};
+        // Never run the 9mm-derived aim/fire path for the held knife. With
+        // useAlternativeAim the renderer locks the mesh to the camera (so it
+        // hangs behind the hand instead of riding it) and LMB runs the gun
+        // recoil cycle, which tumbles the mesh on a zero-ammo "gun".
+        definition.useAlternativeAim = {};
+        definition.ammoCount = 0;
+        definition.fireRate = 18;
+        definition.bulletTypeID = 0;
+        definition.bulletVelocity = 0.0f;
+        definition.bulletSpread = 0.0f;
+        definition.handCount = 1;
+        definition.rightHandOffset = structs::CVector3(
+            M9_IDLE_ITEM_POS[0], M9_IDLE_ITEM_POS[1], M9_IDLE_ITEM_POS[2]);
+        definition.leftHandOffset = structs::CVector3(0.0f, 0.0f, 0.0f);
+        definition.gunHoldPosition = structs::CVector3(0.26f, -0.22f, 0.52f);
+        definition.primaryGripStiffness = 0.95f;
+        // The native grip field is radians.  Feeding it the old value 20.0
+        // asked the IK drive to wind the wrist through several complete turns,
+        // which is the source of the spinning/disc pose.  Keep tuning values in
+        // human-friendly degrees, but only ever give radians to the engine.
+        // Keep the model aligned to its original grip; server Lua controls the
+        // hand's actual hold/stab orientation through the wrist quaternion.
+        definition.primaryGripRotation = glm::radians(-160.0f);
+        definition.secondaryGripStiffness = 0.0f;
+        definition.secondaryGripRotation = 0.0f;
+
+        GetItemTypeManager()->RegisterID("sandium", "m9_bayonet", M9_BAYONET_TYPE);
+        m9Configured = true;
+        try
+        {
+            m9ModelLoaded = itemmodels::Set(
+                addresses::ItemTypes[M9_BAYONET_TYPE],
+                "sandium/models/m9_bayonet/m9_bayonet.cmo",
+                "sandium/models/m9_bayonet/m9_bayonet.png");
+        }
+        catch (const std::exception &error)
+        {
+            m9ModelLoaded = false;
+            api::GetSandiumLogger()->Log("M9 Bayonet model error: {}", error.what());
+        }
+        LoadSavedM9Grip();
+        api::GetSandiumLogger()->Log("Registered sandium:m9_bayonet as native item type {}",
+                                     M9_BAYONET_TYPE);
+    }
+
     // live grip tuning: typing "grip <x> <y> <z>" in chat moves the right
     // hand on the held revolver; the value persists in sandium_grip.txt and is
     // re-applied on every launch until removed.
@@ -254,6 +357,88 @@ namespace custommodels
         float x, y, z;
         if (std::sscanf(lower, "grip %f %f %f", &x, &y, &z) == 3)
             ApplyGrip(x, y, z);
+    }
+
+    void CheckM9Command()
+    {
+        static char lastCommand[61] = {};
+#if _WIN32
+        if (GetAsyncKeyState(VK_F8) & 1)
+        {
+            m9Spawned = false;
+            m9SpawnRequested = true;
+            api::GetSandiumLogger()->Log("M9 Bayonet spawn requested from F8");
+        }
+#endif
+        if (!addresses::Base.ptr)
+            return;
+        const char *chat = reinterpret_cast<const char *>(
+            reinterpret_cast<const char *>(addresses::Base.ptr) + 0x404A6C + 4ULL * 283785913);
+        char lower[61];
+        std::size_t i = 0;
+        for (; i < 60 && chat[i]; ++i)
+            lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(chat[i])));
+        lower[i] = 0;
+        if (std::strcmp(lower, lastCommand) == 0)
+            return;
+        std::strncpy(lastCommand, lower, 60);
+        if (std::strcmp(lower, "m9") == 0 || std::strcmp(lower, "knife") == 0 ||
+            std::strcmp(lower, "/m9") == 0 || std::strcmp(lower, "/knife") == 0)
+        {
+            m9Spawned = false;
+            m9SpawnRequested = true;
+            api::GetSandiumLogger()->Log("M9 Bayonet spawn requested from chat command");
+        }
+        float gx, gy, gz;
+        if (std::sscanf(lower, "m9grip %f %f %f", &gx, &gy, &gz) == 3)
+            ApplyM9Grip(gx, gy, gz);
+        float gr;
+        if (std::sscanf(lower, "m9rot %f", &gr) == 1)
+            ApplyM9GripRotation(gr);
+    }
+
+    // live M9 tuning: "m9grip <x> <y> <z>" moves the knife on the hand,
+    // "m9rot <deg>" twists it; both persist in sandium_m9grip.txt.
+    void ApplyM9Grip(float x, float y, float z)
+    {
+        addresses::ItemTypes[M9_BAYONET_TYPE].rightHandOffset = structs::CVector3(x, y, z);
+        const float degrees = glm::degrees(
+            addresses::ItemTypes[M9_BAYONET_TYPE].primaryGripRotation);
+        if (std::FILE *f = std::fopen("sandium_m9grip.txt", "w"))
+        {
+            std::fprintf(f, "%.4f %.4f %.4f %.4f\n", x, y, z, degrees);
+            std::fclose(f);
+        }
+        api::GetSandiumLogger()->Log("M9 grip set to {:.4f} {:.4f} {:.4f}", x, y, z);
+    }
+
+    void ApplyM9GripRotation(float degrees)
+    {
+        addresses::ItemTypes[M9_BAYONET_TYPE].primaryGripRotation = glm::radians(degrees);
+        const auto off = addresses::ItemTypes[M9_BAYONET_TYPE].rightHandOffset;
+        if (std::FILE *f = std::fopen("sandium_m9grip.txt", "w"))
+        {
+            // Persist degrees so existing files and the m9rot command remain
+            // understandable.  Conversion happens only at the engine boundary.
+            std::fprintf(f, "%.4f %.4f %.4f %.4f\n", off.x, off.y, off.z, degrees);
+            std::fclose(f);
+        }
+        api::GetSandiumLogger()->Log("M9 grip rotation set to {:.2f} degrees ({:.4f} radians)",
+                                     degrees, glm::radians(degrees));
+    }
+
+    void LoadSavedM9Grip()
+    {
+        if (std::FILE *f = std::fopen("sandium_m9grip.txt", "r"))
+        {
+            float x, y, z, r = 0.0f;
+            const int got = std::fscanf(f, "%f %f %f %f", &x, &y, &z, &r);
+            if (got >= 3)
+                addresses::ItemTypes[M9_BAYONET_TYPE].rightHandOffset = structs::CVector3(x, y, z);
+            if (got == 4)
+                addresses::ItemTypes[M9_BAYONET_TYPE].primaryGripRotation = glm::radians(r);
+            std::fclose(f);
+        }
     }
 
     void UpdateRevolver()
@@ -314,6 +499,124 @@ namespace custommodels
             api::GetSandiumLogger()->Log("Spawned loaded revolver item {} for human {} in slot {}", itemID, h, slot);
             return;
         }
+    }
+
+    void UpdateM9Bayonet()
+    {
+        CheckM9Command();
+        if (!m9Configured || !addresses::IsInGame.ptr)
+            return;
+
+        const bool inGame = *addresses::IsInGame;
+        if (!inGame)
+        {
+            m9Spawned = false;
+            m9WasInGame = false;
+            m9SpawnRequested = false;
+            m9StabBlend = 0.0f;
+            return;
+        }
+        if (!m9WasInGame)
+        {
+            m9Spawned = false;
+            m9WasInGame = true;
+        }
+
+        structs::Human *localHuman = nullptr;
+        int localHumanID = -1;
+        for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
+        {
+            auto &human = addresses::Humans[h];
+            if (human.isActive.b1)
+            {
+                localHuman = &human;
+                localHumanID = static_cast<int>(h);
+                break;
+            }
+        }
+        if (!localHuman)
+            return;
+
+        // The server publishes both offsets. Select locally from LMB so the
+        // mesh moves with the stab on the same frame without touching any
+        // rigid-body rotation, axis, velocity, or torque.
+        bool holdingM9 = false;
+        for (std::size_t i = 0; i < structs::Item::VanillaCount; ++i)
+        {
+            const auto &item = addresses::Items[i];
+            if (item.isActive.b1 && item.typeID == M9_BAYONET_TYPE &&
+                item.parentHumanID == localHumanID)
+            {
+                holdingM9 = true;
+                break;
+            }
+        }
+        const bool stabbing = holdingM9 && (localHuman->inputFlags & 1u) != 0;
+        structs::CVector3 streamedGrip;
+        const std::string gripFlag = flags::Get(stabbing ? "bayonet_gripstab" : "bayonet_grip");
+        if (ParseM9GripFlag(gripFlag, streamedGrip))
+            addresses::ItemTypes[M9_BAYONET_TYPE].rightHandOffset = streamedGrip;
+        const std::string rotationFlag = flags::Get(
+            stabbing ? "bayonet_gripstabrot" : "bayonet_griprot");
+        float streamedRotation = 0.0f;
+        if (std::sscanf(rotationFlag.c_str(), "%f", &streamedRotation) == 1)
+            addresses::ItemTypes[M9_BAYONET_TYPE].primaryGripRotation =
+                glm::radians(streamedRotation);
+
+        // Hand placement belongs to the server (arm IK). The client keeps a
+        // single static item offset and never animates it: no per-frame
+        // sliding, no aim/fire path (see ConfigureM9BayonetType).
+        // Spawn only on explicit request (m9/knife chat, F8). Auto-spawning
+        // on join duplicates the server's knife with a loose second blade.
+        if (m9Spawned || !m9ModelLoaded || !m9SpawnRequested)
+            return;
+
+        int slot = -1;
+        for (int s = 0; s < 6; ++s)
+        {
+            if (s != 2 && localHuman->inventorySlots[s].numberOfPlaces == 0)
+            {
+                slot = s;
+                break;
+            }
+        }
+        if (slot < 0)
+        {
+            if (!m9SpawnRequested)
+                return;
+            api::GetSandiumLogger()->Log("M9 Bayonet inventory full; spawning on ground instead");
+        }
+
+        structs::CVector3 position = localHuman->position;
+        if (slot < 0)
+        {
+            const float yaw = localHuman->viewYaw;
+            position.x += std::sin(yaw) * 1.2f;
+            position.y += 0.25f;
+            position.z += std::cos(yaw) * 1.2f;
+        }
+        structs::CVector3 velocity{};
+        structs::COrientation orientation{};
+        int itemID = -1;
+        {
+            subhook::ScopedHookRemove remove(createItemHook);
+            itemID = addresses::CreateItemFunc(M9_BAYONET_TYPE, &position, &velocity, &orientation);
+        }
+        if (itemID < 0 || itemID >= static_cast<int>(structs::Item::VanillaCount))
+            return;
+        addresses::Items[itemID].ammoCount = 0;
+        if (slot >= 0 && (!addresses::AttachItemFunc.ptr ||
+            addresses::AttachItemFunc(itemID, -1, localHumanID, slot) == 0)
+        )
+        {
+            addresses::Items[itemID].isActive = {};
+            api::GetSandiumLogger()->Log("M9 Bayonet error: native inventory attachment failed for item {}", itemID);
+            return;
+        }
+        m9Spawned = true;
+        m9SpawnRequested = false;
+        api::GetSandiumLogger()->Log("Spawned M9 Bayonet item {} for human {} in slot {}",
+                                     itemID, localHumanID, slot);
     }
 
     void UpdateAndDraw()

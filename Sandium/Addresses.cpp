@@ -55,6 +55,7 @@ FuncAddress<addresses::DrawHUDFuncType> addresses::DrawHUDFunc;
 FuncAddress<addresses::VoidFuncType> addresses::ConnectMasterServerFunc;
 FuncAddress<addresses::CreateItemFuncType> addresses::CreateItemFunc;
 FuncAddress<addresses::AttachItemFuncType> addresses::AttachItemFunc;
+FuncAddress<addresses::HumanLimbIKFuncType> addresses::HumanLimbIKFunc;
 FuncAddress<addresses::LoadCMOFuncType> addresses::LoadCMOFunc;
 FuncAddress<addresses::BindItemModelFuncType> addresses::BindItemModelFunc;
 FuncAddress<addresses::LoadTextureFuncType> addresses::LoadTextureFunc;
@@ -142,6 +143,7 @@ label_client: {}
     addresses::ConnectMasterServerFunc.Register(baseAddress + DYNADDR(0xA3F30, 0x71447));
     addresses::CreateItemFunc.Register(baseAddress + DYNADDR(0x54130, 0xC5F2B));
     addresses::AttachItemFunc.Register(baseAddress + DYNADDR(0xE35D0, 0x0));
+    addresses::HumanLimbIKFunc.Register(baseAddress + DYNADDR(0xB1450, 0x0));
     addresses::LoadCMOFunc.Register(baseAddress + DYNADDR(0xE9A60, 0x0));
     addresses::BindItemModelFunc.Register(baseAddress + DYNADDR(0x13FCD0, 0x0));
     addresses::LoadTextureFunc.Register(baseAddress + DYNADDR(0xEDED0, 0x0));
@@ -220,6 +222,7 @@ label_dedicated: {}
     addresses::ConnectMasterServerFunc.Register(baseAddress + DYNADDR(0x4FEB0, 0x0));
     addresses::CreateItemFunc.Register(baseAddress + DYNADDR(0x3B080, 0x0));
     addresses::AttachItemFunc.Register(0);
+    addresses::HumanLimbIKFunc.Register(0);
     addresses::LoadCMOFunc.Register(0);
     addresses::BindItemModelFunc.Register(0);
     addresses::LoadTextureFunc.Register(0);

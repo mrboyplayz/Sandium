@@ -84,7 +84,10 @@ void SetupItemTypesHookFunc()
     }
 
     if (expandedClient)
+    {
         custommodels::ConfigureRevolverType();
+        custommodels::ConfigureM9BayonetType();
+    }
 
     GetMainLuaManager()->CallHooks("SetupItemTypes", "post");
 }

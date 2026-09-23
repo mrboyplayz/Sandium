@@ -67,6 +67,7 @@ if (WIN32)
     target_compile_definitions(Sandium PRIVATE SUBHOOK_STATIC) # Windows will give "dllimport" errors without this define.
     target_link_libraries(Sandium "Ws2_32")
     target_link_libraries(Sandium "bcrypt")
+    target_link_libraries(Sandium "crypt32")
     target_link_libraries(Sandium "windowscodecs" "ole32" "mfplat" "mfreadwrite" "mfuuid" "uuid" "mmdevapi")
     target_link_libraries(Sandium "${CMAKE_SOURCE_DIR}/Output/moonjit/src/lua51.lib" "${CMAKE_SOURCE_DIR}/Output/moonjit/src/luajit.lib")
 endif ()

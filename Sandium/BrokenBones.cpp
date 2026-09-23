@@ -55,7 +55,9 @@ namespace brokenbones
         unsigned int diagFrames = 0;
 
         std::shared_ptr<api::Sound> crackSound;
-        bool soundFailed = false;
+        std::shared_ptr<api::Sound> stabSound;
+        bool crackSoundFailed = false;
+        bool stabSoundFailed = false;
         std::chrono::steady_clock::time_point lastCrack{};
 
         // ---- bone drive records ----
@@ -74,10 +76,11 @@ namespace brokenbones
         bool ProbeRecordSet(const RecordSet &set);
 
         // ---- server event channel ----
-        // The Bones plugin appends "crack <id> <x> <y> <z>" to
-        // /stream/events.txt on every break; clients poll it (1s) and play
-        // the crack with volume by distance, so everyone hears breaks.
-        std::atomic<long long> lastEventId{0};
+        // Server plugins append positional one-shot events to events.txt.
+        // Track each event kind independently because their IDs are generated
+        // by different plugins and therefore are not globally ordered.
+        std::atomic<long long> lastCrackEventId{0};
+        std::atomic<long long> lastStabEventId{0};
         std::atomic<bool> eventsStarted{false};
 
         void PlayCrack(float volume);
@@ -106,6 +109,30 @@ namespace brokenbones
             }
         }
 
+        void PlayStabForEvent(float x, float y, float z)
+        {
+            if (!stabSoundFailed && !stabSound)
+            {
+                if (!servermedia::Ready("stab.wav"))
+                    return;
+                const std::string path = servermedia::Path("stab.wav");
+                if (path.empty())
+                    return;
+                try
+                {
+                    // Keep this outside the game's occupied sound-ID range.
+                    stabSound = api::Sound::Load3D(path, 4094, 2.0f);
+                }
+                catch (...)
+                {
+                    stabSoundFailed = true;
+                    return;
+                }
+            }
+            if (stabSound)
+                stabSound->PlayOneShot3D(x, y, z, 1.0f, 1.0f);
+        }
+
         void EventsThreadProc()
         {
             for (;;)
@@ -123,10 +150,21 @@ namespace brokenbones
                             long long id = 0;
                             float x = 0, y = 0, z = 0;
                             if (std::sscanf(l.c_str(), "crack %lld %f %f %f", &id, &x, &y, &z) == 4 &&
-                                id > lastEventId.load())
+                                id > lastCrackEventId.load())
                             {
-                                lastEventId = id;
+                                lastCrackEventId = id;
                                 PlayCrackForEvent(x, y, z);
+                            }
+                        }
+                        else if (l.rfind("stab ", 0) == 0)
+                        {
+                            long long id = 0;
+                            float x = 0, y = 0, z = 0;
+                            if (std::sscanf(l.c_str(), "stab %lld %f %f %f", &id, &x, &y, &z) == 4 &&
+                                id > lastStabEventId.load())
+                            {
+                                lastStabEventId = id;
+                                PlayStabForEvent(x, y, z);
                             }
                         }
                         l.clear();
@@ -144,7 +182,9 @@ namespace brokenbones
                     if (!line.empty())
                         take(line);
                 }
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                // Combat feedback cannot tolerate the old one-second crack
+                // polling delay; this file is tiny, so poll at 5 Hz.
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
             }
         }
 
@@ -308,7 +348,7 @@ namespace brokenbones
             const auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastCrack).count() < SOUND_COOLDOWN_MS)
                 return;
-            if (!soundFailed && !crackSound)
+            if (!crackSoundFailed && !crackSound)
             {
                 if (!servermedia::Ready("bonecrack.mp3"))
                     return;
@@ -321,7 +361,7 @@ namespace brokenbones
                 }
                 catch (...)
                 {
-                    soundFailed = true;
+                    crackSoundFailed = true;
                     return;
                 }
             }

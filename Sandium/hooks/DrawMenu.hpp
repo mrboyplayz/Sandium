@@ -43,7 +43,13 @@ subhook::Hook *drawMenuHook;
 int DrawMenuHookFunc(int unk)
 {
     subhook::ScopedHookRemove scopedRemove(drawMenuHook);
-    radioplayer::StopSession();
+    // DrawMenu is also invoked while a game session is active (for the
+    // in-game interface).  Clearing the radio here used to race every
+    // completed download: the next HUD frame never got a chance to create
+    // and start its audio source.  Only stop it after actually leaving the
+    // session.
+    if (!*addresses::IsInGame)
+        radioplayer::StopSession();
 
     static bool directJoinInited = false;
     if (!directJoinInited)

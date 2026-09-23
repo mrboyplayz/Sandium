@@ -29,8 +29,11 @@ namespace radioplayer
     {
         constexpr const char *MASTER_HOST = "185.227.111.150";
         constexpr uint16_t MASTER_HTTP_PORT = 80;
-        constexpr float FULL_VOLUME_RADIUS = 1.0f;
-        constexpr float AUDIBLE_RADIUS = 4.0f;
+        // Keep radio decoding on Sound's streaming audio thread.  Loading an
+        // MP3 as a native 3D sample decodes the entire song on DrawHUD, which
+        // stalls rendering during joins.  Stereo gain/pan below provides a
+        // stable car-relative source without touching native source internals.
+        constexpr float AUDIBLE_RADIUS = 28.0f;
 
         constexpr int DOWNLOAD_RETRY_FRAMES = 300;
 
@@ -44,7 +47,10 @@ namespace radioplayer
         std::mutex completedNameMutex;
         std::string completedName;
         int downloadRetryFrames = 0;
-        bool pausedForDistance = false;
+        std::atomic<bool> decodePending{false};
+        std::mutex decodedSoundMutex;
+        std::shared_ptr<api::Sound> decodedSound;
+        std::string decodedName;
 
         void StopCurrentSource()
         {
@@ -58,7 +64,10 @@ namespace radioplayer
             downloadDone = false;
             downloadFailed = false;
             downloadRetryFrames = 0;
-            pausedForDistance = false;
+            decodePending = false;
+            const std::lock_guard<std::mutex> lock(decodedSoundMutex);
+            decodedSound.reset();
+            decodedName.clear();
         }
 
         void DownloadThread(std::string file)
@@ -115,6 +124,29 @@ namespace radioplayer
             api::GetSandiumLogger()->Log("Radio downloading {}", downloadName);
             std::thread(DownloadThread, downloadName).detach();
         }
+
+        void DecodeThread(std::string file)
+        {
+            try
+            {
+                auto sound = api::Sound::Load(std::string("sandium/cache/") + file);
+                const std::lock_guard<std::mutex> lock(decodedSoundMutex);
+                decodedName = file;
+                decodedSound = std::move(sound);
+            }
+            catch (const std::exception &error)
+            {
+                api::GetSandiumLogger()->Log("<red>Radio decode failed: {}", error.what());
+            }
+            decodePending = false;
+        }
+
+        void StartDecode()
+        {
+            if (downloadName.empty() || decodePending.exchange(true))
+                return;
+            std::thread(DecodeThread, downloadName).detach();
+        }
     }
 
     void Update()
@@ -141,10 +173,15 @@ namespace radioplayer
                     current->Stop();
                     current.reset();
                 }
-                pausedForDistance = false;
                 currentVehicle = vid;
                 downloadName = file;
                 downloadRetryFrames = 0;
+                decodePending = false;
+                {
+                    const std::lock_guard<std::mutex> lock(decodedSoundMutex);
+                    decodedSound.reset();
+                    decodedName.clear();
+                }
                 StartDownload();
             }
         }
@@ -160,7 +197,8 @@ namespace radioplayer
                 StartDownload();
         }
 
-        // start once the file landed
+        // Decode/initialize audio away from DrawHUD. Constructing a Media
+        // Foundation reader or opening an endpoint can stall a rendered frame.
         if (downloadDone && !current)
         {
             downloadDone = false;
@@ -174,16 +212,31 @@ namespace radioplayer
                 downloadRetryFrames = 0;
                 return;
             }
-            const std::string path = std::string("sandium/cache/") + downloadName;
+            StartDecode();
+        }
+
+        // Start the fully prepared streaming player on the game thread.
+        if (!current && !decodePending)
+        {
+            std::shared_ptr<api::Sound> ready;
+            {
+                const std::lock_guard<std::mutex> lock(decodedSoundMutex);
+                if (decodedName == downloadName)
+                {
+                    ready = decodedSound;
+                    decodedSound.reset();
+                    decodedName.clear();
+                }
+            }
+            if (ready)
+            {
             try
             {
                 if (currentVehicle >= structs::Vehicle::VanillaCount || !addresses::Vehicles.ptr ||
                     !addresses::Vehicles[currentVehicle].isActive.b1)
                     throw std::runtime_error("radio vehicle is no longer active");
-                current = api::Sound::Load3D(path);
-                const structs::Vehicle &car = addresses::Vehicles[currentVehicle];
-                current->Play3D(car.position.x, car.position.y, car.position.z, 1.0f, true);
-                pausedForDistance = false;
+                current = std::move(ready);
+                current->Play(1.0f);
                 api::GetSandiumLogger()->Log("Radio playing {} on vehicle {}", downloadName, currentVehicle);
                 downloadName.clear();
             }
@@ -192,6 +245,7 @@ namespace radioplayer
                 api::GetSandiumLogger()->Log("<red>Radio playback failed: {}", error.what());
                 current.reset();
                 downloadName.clear();
+            }
             }
         }
 
@@ -203,46 +257,50 @@ namespace radioplayer
         {
             current->Stop();
             current.reset();
-            pausedForDistance = false;
             return;
         }
-        if (!api::glcap::HasLastView() || !api::glcap::LastViewPositionValid())
-            return;
-
-        const float *cam = api::glcap::LastViewPosition();
-        const structs::Vehicle &car = addresses::Vehicles[currentVehicle];
-        const float dx = car.position.x - cam[0];
-        const float dy = car.position.y - cam[1];
-        const float dz = car.position.z - cam[2];
-        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-        if (dist >= AUDIBLE_RADIUS)
-        {
-            if (!pausedForDistance)
+        // View-position uniforms may belong to a reflection/shadow pass.
+        // The player's replicated human position is the stable listener
+        // location to use for the radio's distance cutoff.
+        const structs::Human *listener = nullptr;
+        for (std::size_t humanID = 0; humanID < structs::Human::VanillaCount; ++humanID)
+            if (addresses::Humans[humanID].isActive.b1)
             {
-                current->SetVolume(0.0f);
-                pausedForDistance = true;
+                listener = &addresses::Humans[humanID];
+                break;
             }
+        if (!listener || !api::glcap::HasLastView())
+            return;
+
+        const structs::Vehicle &car = addresses::Vehicles[currentVehicle];
+        const float dx = car.position.x - listener->position.x;
+        const float dy = car.position.y - listener->position.y;
+        const float dz = car.position.z - listener->position.z;
+        const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        float atten = 1.0f - dist / AUDIBLE_RADIUS;
+        if (atten <= 0.0f)
+        {
+            current->SetGainLR(0.0f, 0.0f);
             return;
         }
+        atten *= atten;
 
-        if (pausedForDistance)
+        // Pan against the camera's right vector so the radio tracks the car
+        // as it moves around the listener rather than sounding screen-fixed.
+        const float *view = api::glcap::LastViewMatrix();
+        float right[3];
+        if (api::glcap::LastViewTransposed())
         {
-            current->SetVolume(1.0f);
-            pausedForDistance = false;
+            right[0] = view[0]; right[1] = view[4]; right[2] = view[8];
         }
-
-        const float distanceT = std::clamp((dist - FULL_VOLUME_RADIUS) /
-                                           (AUDIBLE_RADIUS - FULL_VOLUME_RADIUS),
-                                           0.0f, 1.0f);
-        // Smooth inverse rolloff: loud beside the car, rapidly quieter as the
-        // listener walks away, and exactly silent at the cutoff.
-        const float smoothT = distanceT * distanceT * (3.0f - 2.0f * distanceT);
-        const float atten = (1.0f - smoothT) * (1.0f - smoothT);
-
-        current->SetPosition(car.position.x, car.position.y, car.position.z);
-        // Sub Rosa applies its own inverse-distance attenuation before HRTF.
-        // This envelope preserves the requested four-unit hard cutoff.
-        current->SetVolume(atten);
+        else
+        {
+            right[0] = view[0]; right[1] = view[1]; right[2] = view[2];
+        }
+        const float length = dist > 0.001f ? dist : 1.0f;
+        const float pan = (dx * right[0] + dy * right[1] + dz * right[2]) / length;
+        current->SetGainLR(atten * (0.5f - 0.50f * pan),
+                           atten * (0.5f + 0.50f * pan));
 #endif
     }
 

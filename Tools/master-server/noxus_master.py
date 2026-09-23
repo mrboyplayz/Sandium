@@ -30,6 +30,9 @@ gate_password = {}
 gate_challenges = {}
 gate_authorized = {}
 gate_failures = defaultdict(deque)
+# New on every process start. Remembered client unlocks are bound to this ID,
+# so restarting the master invalidates them without storing any password data.
+gate_session_id = secrets.token_hex(16)
 
 def now():
     return time.strftime('%Y-%m-%d %H:%M:%S')
@@ -77,6 +80,7 @@ def gate_new_challenge(ip):
         'nonce': nonce.hex(),
         'salt': gate_password['salt'].hex(),
         'iterations': gate_password['iterations'],
+        'session': gate_session_id,
     }
 
 def gate_verify(ip, challenge_id, proof_hex):
@@ -336,7 +340,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ip = self.client_address[0]
         if gate_verify(ip, challenge_id, proof):
             print(f'{now()} GATE authorized ip={ip}', flush=True)
-            self._send_json(200, {'ok': True, 'expiresIn': GATE_SESSION_SECONDS})
+            self._send_json(200, {
+                'ok': True,
+                'expiresIn': GATE_SESSION_SECONDS,
+                'session': gate_session_id,
+            })
         else:
             status = 429 if gate_rate_limited(ip) else 403
             print(f'{now()} GATE rejected ip={ip} status={status}', flush=True)
@@ -356,7 +364,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 {'ok': False, 'error': 'unavailable'})
             return
         elif path == '/gate/status':
-            self._send_json(200, {'authorized': gate_is_authorized(self.client_address[0])})
+            self._send_json(200, {
+                'authorized': gate_is_authorized(self.client_address[0]),
+                'session': gate_session_id,
+            })
             return
         elif path == '/gate/check':
             if self.client_address[0] not in ('127.0.0.1', '::1'):

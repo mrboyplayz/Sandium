@@ -37,6 +37,11 @@ namespace painshader
 {
     namespace
     {
+        // Network state is populated in several steps while joining.  Those
+        // transient health/limb changes can look like a catastrophic hit and
+        // falsely trigger the multi-second blackout, so keep the knockout
+        // mechanic disabled until it has a reliable server-side damage source.
+        constexpr bool UNCONSCIOUSNESS_ENABLED = false;
         int lastHealth = 100;
         int lastLimbs[6] = {100, 100, 100, 100, 100, 100};
         bool limbsValid = false;
@@ -256,7 +261,7 @@ namespace painshader
                 }
             }
         }
-        else if (immunity <= 0.0f)
+        else if (UNCONSCIOUSNESS_ENABLED && immunity <= 0.0f)
         {
             if (lastPain >= 9.5f)
             {

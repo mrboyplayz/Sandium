@@ -1,11 +1,13 @@
 #include "Footsteps.hpp"
 
 #include "Addresses.hpp"
+#include "api/Http.hpp"
 #include "api/Logging.hpp"
 #include "api/Sound.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -14,7 +16,10 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace footsteps
 {
@@ -41,16 +46,22 @@ namespace footsteps
         constexpr std::size_t SAMPLE_COUNT = 4;
         constexpr unsigned int FIRST_SOUND_ID = 4000;
         constexpr std::size_t TEXTURE_ENTRY_STRIDE = 184;
+        constexpr float AUDIBLE_RADIUS = 26.0f;
 
         using Clock = std::chrono::steady_clock;
         struct HumanStepState
         {
             bool active = false;
             bool grounded = false;
+            bool footDown[2] = {};
+            bool footSeen[2] = {};
+            structs::CVector3 previousFoot[2]{};
+            float previousFootRelativeY[2] = {};
+            float previousFootVelocityY[2] = {};
             structs::CVector3 previous{};
-            float distance = 0.0f;
             Clock::time_point lastFrame{};
             Clock::time_point lastStep{};
+            Clock::time_point lastFootStep[2]{};
             std::uint32_t sequence = 0;
         };
 
@@ -59,6 +70,113 @@ namespace footsteps
                    static_cast<std::size_t>(Material::Count)> sounds{};
         bool loadAttempted = false;
         bool soundsReady = false;
+
+        void ResetState(HumanStepState &state, const structs::CVector3 &position,
+                        const Clock::time_point &now, bool grounded);
+
+        struct StepEvent
+        {
+            long long id;
+            float x, y, z, speed;
+            unsigned int sample;
+        };
+        std::mutex eventsMutex;
+        std::vector<StepEvent> pendingEvents;
+        std::atomic<bool> eventsStarted{false};
+        std::atomic<long long> lastEventID{0};
+        bool eventBaselineReady = false;
+
+        void EventThreadProc()
+        {
+            for (;;)
+            {
+                const std::string body = http::Get("185.227.111.150", 80,
+                                                   "/stream/footsteps.txt", 2500,
+                                                   "SANDIUM_MASTER");
+                if (!body.empty())
+                {
+                    std::vector<StepEvent> received;
+                    std::size_t start = 0;
+                    while (start < body.size())
+                    {
+                        const std::size_t end = body.find('\n', start);
+                        const std::string line = body.substr(start, end - start);
+                        long long id = 0;
+                        char human[96] = {};
+                        StepEvent event{};
+                        if (std::sscanf(line.c_str(), "step %lld %95s %f %f %f %f %u",
+                                        &id, human, &event.x, &event.y, &event.z,
+                                        &event.speed, &event.sample) == 7)
+                        {
+                            event.id = id;
+                            if (id > lastEventID.load())
+                                received.push_back(event);
+                        }
+                        if (end == std::string::npos)
+                            break;
+                        start = end + 1;
+                    }
+                    if (!received.empty())
+                    {
+                        lastEventID = received.back().id;
+                        // The first poll establishes the current tail. Never
+                        // replay the complete server history after joining.
+                        if (eventBaselineReady)
+                        {
+                            const std::lock_guard<std::mutex> lock(eventsMutex);
+                            pendingEvents.insert(pendingEvents.end(), received.begin(), received.end());
+                        }
+                        else
+                            eventBaselineReady = true;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(75));
+            }
+        }
+
+        void StartEvents()
+        {
+            if (!eventsStarted.exchange(true))
+                std::thread(EventThreadProc).detach();
+        }
+
+        void PlayServerEvents()
+        {
+            std::vector<StepEvent> events;
+            {
+                const std::lock_guard<std::mutex> lock(eventsMutex);
+                events.swap(pendingEvents);
+            }
+            for (const StepEvent &event : events)
+            {
+                // The VPS only tells us that and where a step happened. Each
+                // client owns audibility: use its own local player position so
+                // distance cannot be wrong because of server/client camera
+                // state or another player's viewpoint.
+                const structs::Human *listener = nullptr;
+                for (std::size_t humanID = 0; humanID < structs::Human::VanillaCount; ++humanID)
+                    if (addresses::Humans[humanID].isActive.b1)
+                    {
+                        listener = &addresses::Humans[humanID];
+                        break;
+                    }
+                if (!listener)
+                    continue;
+                const float dx = event.x - listener->position.x;
+                const float dy = event.y - listener->position.y;
+                const float dz = event.z - listener->position.z;
+                const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (distance >= AUDIBLE_RADIUS)
+                    continue;
+                const float distanceGain = 1.0f - distance / AUDIBLE_RADIUS;
+                const std::size_t sample = event.sample % SAMPLE_COUNT;
+                const float volume = std::clamp(0.86f + event.speed * 0.09f, 0.95f, 1.55f) *
+                                     distanceGain * distanceGain;
+                sounds[static_cast<std::size_t>(Material::Concrete)][sample]->PlayOneShot3D(
+                    event.x, event.y + 0.08f, event.z, volume,
+                    0.94f + static_cast<float>(sample) * 0.02f);
+            }
+        }
 
         std::string LowerTextureName(int materialID)
         {
@@ -243,21 +361,56 @@ namespace footsteps
             }
 
             const structs::LineIntersectResult hit = *addresses::LineIntersectResult.ptr;
-            int materialID = -1;
-            if (hit.areaID >= 0 && hit.areaID < 4 && addresses::SurfaceMaterialLookupFunc.ptr)
+            int materialID = hit.materialID;
+            if (materialID < 0 && hit.areaID >= 0 && hit.areaID < 4 &&
+                addresses::SurfaceMaterialLookupFunc.ptr)
             {
                 materialID = addresses::SurfaceMaterialLookupFunc(
                     static_cast<unsigned int>(hit.areaID), static_cast<unsigned int>(hit.blockX),
                     static_cast<unsigned int>(hit.blockY), static_cast<unsigned int>(hit.blockZ),
                     hit.faceMaterialSlot);
             }
-            else
+            if (materialID < 0)
             {
                 materialID = LooseObjectMaterialUnder(position);
             }
             const Material material = Classify(LowerTextureName(materialID));
             *addresses::LineIntersectResult.ptr = savedResult;
             return material;
+        }
+
+        bool FootNearGround(const structs::CVector3 &position, float &distance)
+        {
+            distance = 0.0f;
+            if (!addresses::LineIntersectLevelFunc.ptr || !addresses::LineIntersectResult.ptr)
+                return true;
+
+            const structs::LineIntersectResult savedResult = *addresses::LineIntersectResult.ptr;
+            structs::CVector3 start(position.x, position.y + 0.18f, position.z);
+            structs::CVector3 end(position.x, position.y - 0.55f, position.z);
+            const bool hit = addresses::LineIntersectLevelFunc(&start, &end, 1) != 0;
+            const structs::LineIntersectResult result = *addresses::LineIntersectResult.ptr;
+            *addresses::LineIntersectResult.ptr = savedResult;
+            if (!hit)
+                return false;
+
+            const float dx = position.x - result.position.x;
+            const float dy = position.y - result.position.y;
+            const float dz = position.z - result.position.z;
+            distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+            return distance <= 0.34f;
+        }
+
+        bool HumanNearGround(const structs::CVector3 &position)
+        {
+            if (!addresses::LineIntersectLevelFunc.ptr || !addresses::LineIntersectResult.ptr)
+                return true;
+            const structs::LineIntersectResult savedResult = *addresses::LineIntersectResult.ptr;
+            structs::CVector3 start(position.x, position.y + 0.2f, position.z);
+            structs::CVector3 end(position.x, position.y - 2.5f, position.z);
+            const bool hit = addresses::LineIntersectLevelFunc(&start, &end, 1) != 0;
+            *addresses::LineIntersectResult.ptr = savedResult;
+            return hit;
         }
 
         bool LoadSounds()
@@ -274,7 +427,7 @@ namespace footsteps
                     {
                         const std::string path = std::string("sandium/Assets/footsteps/") +
                             MATERIAL_NAMES[material] + std::to_string(sample + 1) + ".wav";
-                        sounds[material][sample] = api::Sound::Load3D(path, soundID++, 1.8f);
+                        sounds[material][sample] = api::Sound::Load3D(path, soundID++, 4.5f);
                     }
                 }
                 soundsReady = true;
@@ -296,9 +449,69 @@ namespace footsteps
                                        state.sequence++ * 2654435761u;
             const std::size_t sample = (hash >> 16) % SAMPLE_COUNT;
             const float pitch = 0.94f + static_cast<float>((hash >> 8) & 15u) * 0.008f;
-            const float volume = std::clamp(0.58f + speed * 0.080f, 0.66f, 1.18f);
+            const float volume = std::clamp(0.86f + speed * 0.090f, 0.95f, 1.55f);
             sounds[static_cast<std::size_t>(material)][sample]->PlayOneShot3D(
-                position.x, position.y - 0.8f, position.z, volume, pitch);
+                position.x, position.y + 0.08f, position.z, volume, pitch);
+        }
+
+        void UpdateClientSteps()
+        {
+            const Clock::time_point now = Clock::now();
+            for (std::size_t humanID = 0; humanID < states.size(); ++humanID)
+            {
+                const auto &human = addresses::Humans[humanID];
+                auto &state = states[humanID];
+                if (!human.isActive.b1 || human.vehicleID >= 0)
+                {
+                    state.active = false;
+                    continue;
+                }
+                if (!state.active)
+                {
+                    ResetState(state, human.position, now, false);
+                    continue;
+                }
+                const float elapsed = std::chrono::duration<float>(now - state.lastFrame).count();
+                const float dx = human.position.x - state.previous.x;
+                const float dz = human.position.z - state.previous.z;
+                const float travel = std::sqrt(dx * dx + dz * dz);
+                state.previous = human.position;
+                state.lastFrame = now;
+                if (elapsed <= 0.0f || elapsed > 0.5f || travel > 4.0f)
+                    continue; // paused frame, join correction, or teleport
+                const float speed = travel / elapsed;
+                if (speed < 0.35f || !HumanNearGround(human.position))
+                    continue;
+                const float sinceStep = std::chrono::duration<float>(now - state.lastStep).count();
+                const float interval = std::clamp(0.62f - speed * 0.075f, 0.18f, 0.58f);
+                if (sinceStep >= interval)
+                {
+                    state.lastStep = now;
+                    PlayStep(humanID, human.position, speed, state);
+                }
+            }
+        }
+
+        void ResetState(HumanStepState &state, const structs::CVector3 &position,
+                        const Clock::time_point &now, bool grounded)
+        {
+            state.active = true;
+            state.grounded = grounded;
+            state.footDown[0] = false;
+            state.footDown[1] = false;
+            state.footSeen[0] = false;
+            state.footSeen[1] = false;
+            state.previousFoot[0] = {};
+            state.previousFoot[1] = {};
+            state.previousFootRelativeY[0] = 0.0f;
+            state.previousFootRelativeY[1] = 0.0f;
+            state.previousFootVelocityY[0] = 0.0f;
+            state.previousFootVelocityY[1] = 0.0f;
+            state.previous = position;
+            state.lastFrame = now;
+            state.lastStep = now;
+            state.lastFootStep[0] = now;
+            state.lastFootStep[1] = now;
         }
     }
 
@@ -313,6 +526,10 @@ namespace footsteps
         }
         if (!LoadSounds())
             return;
+        // Immediate local detection: each client checks grounded movement and
+        // material under every active player, with no VPS event/poll delay.
+        UpdateClientSteps();
+        return;
 
         const Clock::time_point now = Clock::now();
         for (std::size_t humanID = 0; humanID < states.size(); ++humanID)
@@ -325,16 +542,14 @@ namespace footsteps
                 continue;
             }
 
-            const bool grounded = human.isOnGround && human.isStanding && human.vehicleID < 0 &&
-                                  human.movementStateID < 5;
+            // Remote standing state is unreliable.  Keep its replicated
+            // ground flag only for the movement-cadence fallback; animated
+            // feet use their own raycast below for exact local contact.
+            const bool canWalk = human.vehicleID < 0;
+            const bool networkGrounded = human.isOnGround && canWalk;
             if (!state.active)
             {
-                state.active = true;
-                state.grounded = grounded;
-                state.previous = human.position;
-                state.distance = 0.0f;
-                state.lastFrame = now;
-                state.lastStep = now;
+                ResetState(state, human.position, now, networkGrounded);
                 continue;
             }
 
@@ -345,27 +560,99 @@ namespace footsteps
             state.previous = human.position;
             state.lastFrame = now;
 
-            if (!grounded || travel > 4.0f || elapsed <= 0.0f || elapsed > 0.5f)
+            if (!canWalk || travel > 4.0f || elapsed <= 0.0f || elapsed > 0.5f)
             {
-                state.distance = 0.0f;
-                state.grounded = grounded;
+                state.grounded = networkGrounded;
+                state.footDown[0] = false;
+                state.footDown[1] = false;
+                state.footSeen[0] = false;
+                state.footSeen[1] = false;
                 continue;
             }
 
             const float speed = travel / elapsed;
             if (speed < 0.35f)
-                continue;
-            state.distance += travel;
-            const float stride = speed > 5.0f ? 1.42f : 1.02f;
-            const float sinceStep = std::chrono::duration<float>(now - state.lastStep).count();
-            const float minimumInterval = speed > 5.0f ? 0.15f : 0.22f;
-            if (state.distance >= stride && sinceStep >= minimumInterval)
             {
-                state.distance = std::fmod(state.distance, stride);
-                state.lastStep = now;
-                PlayStep(humanID, human.position, speed, state);
+                state.footDown[0] = false;
+                state.footDown[1] = false;
+                continue;
             }
-            state.grounded = true;
+
+            constexpr int FOOT_BONES[2] = {12, 15};
+            bool playedFromFoot = false;
+            for (int foot = 0; foot < 2; ++foot)
+            {
+                const structs::CVector3 footPosition = human.bones[FOOT_BONES[foot]].position;
+                if (!std::isfinite(footPosition.x) || !std::isfinite(footPosition.y) ||
+                    !std::isfinite(footPosition.z))
+                {
+                    state.footDown[foot] = false;
+                    state.footSeen[foot] = false;
+                    continue;
+                }
+
+                if (!state.footSeen[foot])
+                {
+                    state.footSeen[foot] = true;
+                    state.previousFoot[foot] = footPosition;
+                    state.previousFootRelativeY[foot] = footPosition.y - human.position.y;
+                    state.previousFootVelocityY[foot] = 0.0f;
+                    continue;
+                }
+
+                const float footTravelX = footPosition.x - state.previousFoot[foot].x;
+                const float footTravelY = footPosition.y - state.previousFoot[foot].y;
+                const float footTravelZ = footPosition.z - state.previousFoot[foot].z;
+                if (footTravelX * footTravelX + footTravelY * footTravelY +
+                    footTravelZ * footTravelZ > 16.0f)
+                {
+                    state.footDown[foot] = false;
+                    state.footSeen[foot] = false;
+                    continue;
+                }
+
+                float groundDistance = 0.0f;
+                const bool rayDown = FootNearGround(footPosition, groundDistance);
+                const float relativeY = footPosition.y - human.position.y;
+                const float velocityY = (relativeY - state.previousFootRelativeY[foot]) / elapsed;
+                const bool localLowPoint = state.previousFootVelocityY[foot] < -0.03f &&
+                                           velocityY >= -0.005f;
+                const bool lowEnough = relativeY <= state.previousFootRelativeY[1 - foot] + 0.18f;
+                const bool down = rayDown ||
+                                  (networkGrounded && localLowPoint && lowEnough);
+                const float sinceFoot = std::chrono::duration<float>(
+                    now - state.lastFootStep[foot]).count();
+                if (down && !state.footDown[foot] && sinceFoot >= 0.18f)
+                {
+                    state.lastFootStep[foot] = now;
+                    state.lastStep = now;
+                    PlayStep(humanID, footPosition, speed, state);
+                    playedFromFoot = true;
+                }
+                state.footDown[foot] = down;
+                state.previousFoot[foot] = footPosition;
+                state.previousFootRelativeY[foot] = relativeY;
+                state.previousFootVelocityY[foot] = velocityY;
+            }
+
+            // Remote players do not always receive live foot-bone animation
+            // from the server.  Their replicated root position is reliable,
+            // though, so retain the detailed contact detection where it is
+            // available and fall back to a speed-based walking cadence when
+            // it is not.  This is what makes other players' steps audible.
+            if (!playedFromFoot && networkGrounded)
+            {
+                const float sinceLastStep = std::chrono::duration<float>(
+                    now - state.lastStep).count();
+                const float stepInterval = std::clamp(0.62f - speed * 0.075f,
+                                                      0.25f, 0.58f);
+                if (sinceLastStep >= stepInterval)
+                {
+                    state.lastStep = now;
+                    PlayStep(humanID, human.position, speed, state);
+                }
+            }
+            state.grounded = networkGrounded;
         }
 #endif
     }

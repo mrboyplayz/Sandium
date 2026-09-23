@@ -99,11 +99,9 @@ namespace api
                 const float newHalf = static_cast<float>(degrees) * pi / 360.0f;
                 const float scale = std::tan(oldHalf) / std::tan(newHalf);
 
-                // Left-multiply the combined matrix by an X/Y clip-space scale.
-                // This changes FOV without disturbing camera depth. Apply it to
-                // every perspective MVP so terrain, models, water, and auxiliary
-                // scene passes all agree; the earlier camera-program-only filter
-                // was what caused the split rendering shown in testing.
+                // Every perspective pass must use this exact scale; filtering
+                // by shader/program leaves parts of the world at a different
+                // FOV and creates the visible center seam.
                 if (!transposed)
                 {
                     for (int column = 0; column < 4; ++column)
@@ -233,6 +231,10 @@ namespace api
                                              std::fabs(value[b]) > 0.0001f ||
                                              std::fabs(value[c]) > 0.0001f ||
                                              std::fabs(value[15] - 1.0f) > 0.0001f;
+                    // All perspective world passes need the same projection.
+                    // Filtering by a program's camera uniforms leaves models
+                    // and auxiliary passes at the stock FOV, producing a
+                    // visible seam/split down the middle of the scene.
                     if (perspective)
                     {
                         std::memcpy(fovMatrix, value, sizeof(fovMatrix));
