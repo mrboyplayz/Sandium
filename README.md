@@ -6,6 +6,9 @@ Sandium was partially vibecoded, use at your own risk.
 This project contains multiple modules... \
 Please check "Sandium" and "SandiumLauncher" folders.
 
+# Credits
+This project is a fork of [Suitium](https://github.com/jpxs-intl/Suitium) from JPXs.
+
 ## Compiling & Testing (For Windows)
 
 You will need VS2022 (Full or Build Tools) and CMake.
