@@ -1,6 +1,7 @@
 #include "Time.hpp"
 
 #include "../Addresses.hpp"
+#include "../Diagnostics.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -172,13 +173,9 @@ namespace api
                     foundAngle = reinterpret_cast<float *>(const_cast<char *>(survivors.front().address));
                     addresses::SunAngle.ptr = foundAngle;
                     locked = true;
-                    if (std::FILE *status = std::fopen("sandium_time.txt", "w"))
-                    {
-                        std::fprintf(status, "locked angle at %p (value %.4f)\n",
-                                     reinterpret_cast<void *>(foundAngle),
-                                     *foundAngle);
-                        std::fclose(status);
-                    }
+                    diag::Log("time", "locked angle at %p (value %.4f)",
+                              reinterpret_cast<void *>(foundAngle),
+                              *foundAngle);
                     return;
                 }
             }
@@ -256,17 +253,11 @@ namespace api
         const char *base = reinterpret_cast<const char *>(addresses::SunAngle.ptr);
         const auto f = [&](int offset) { return *reinterpret_cast<const float *>(base + offset); };
         const auto i = [&](int offset) { return *reinterpret_cast<const int *>(base + offset); };
-        if (std::FILE *status = std::fopen("sandium_time.txt", "w"))
-        {
-            std::fprintf(status,
-                "angle=%.4f\n"
-                "speedA(+4)=%.4f speedB(+8)=%.4f dampAcc(+12)=%.4f\n"
-                "divisor(+24)=%.4f dragK(+28)=%.4f divisor2(+32)=%.4f\n"
-                "weather(+48)=%.4f smooth(+56)=%.4f\n"
-                "packetSlot(+152)=%d\n",
-                f(0), f(4), f(8), f(12), f(24), f(28), f(32), f(48), f(56), i(152));
-            std::fclose(status);
-        }
+        diag::Log("time",
+            "angle=%.4f speedA(+4)=%.4f speedB(+8)=%.4f dampAcc(+12)=%.4f "
+            "divisor(+24)=%.4f dragK(+28)=%.4f divisor2(+32)=%.4f "
+            "weather(+48)=%.4f smooth(+56)=%.4f packetSlot(+152)=%d",
+            f(0), f(4), f(8), f(12), f(24), f(28), f(32), f(48), f(56), i(152));
 #endif
     }
 }

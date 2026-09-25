@@ -2,6 +2,7 @@
 
 #include "api/Sound.hpp"
 #include "api/Http.hpp"
+#include "Diagnostics.hpp"
 
 #include "Addresses.hpp"
 #include "ServerMedia.hpp"
@@ -474,15 +475,11 @@ namespace brokenbones
             {
                 if (!addresses::Humans[h].isActive.b1)
                     continue;
-                if (std::FILE *f = std::fopen("sandium_bones.txt", "w"))
-                {
-                    structs::Human &hm = addresses::Humans[h];
-                    std::fprintf(f, "head=%d torso=%d lArm=%d rArm=%d lLeg=%d rLeg=%d total=%d\n",
-                                 hm.headHealth, hm.torsoHealth, hm.leftArmHealth,
-                                 hm.rightArmHealth, hm.leftLegHealth, hm.rightLegHealth,
-                                 hm.health);
-                    std::fclose(f);
-                }
+                structs::Human &hm = addresses::Humans[h];
+                diag::Log("bones", "head=%d torso=%d lArm=%d rArm=%d lLeg=%d rLeg=%d total=%d",
+                          hm.headHealth, hm.torsoHealth, hm.leftArmHealth,
+                          hm.rightArmHealth, hm.leftLegHealth, hm.rightLegHealth,
+                          hm.health);
                 break; // first active human (local in practice)
             }
         }

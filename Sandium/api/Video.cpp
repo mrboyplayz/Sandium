@@ -24,6 +24,7 @@
 #include "Image.hpp"
 
 #include "../Addon.hpp"
+#include "../Diagnostics.hpp"
 #include "../LuaManager.hpp"
 
 #include <algorithm>
@@ -278,14 +279,10 @@ namespace api
                 if (++loops % 200 == 0)
                 {
                     const std::lock_guard<std::mutex> lock(audioMutex);
-                    if (std::FILE *status = std::fopen("sandium_audio.txt", "w"))
-                    {
-                        std::fprintf(status, "channels=%d bufferFrames=%u queue=%.1fs end=%d playing=%d\n",
-                                     audioChannels, audioBufferFrames,
-                                     static_cast<double>(audioQueue.size()) / (48000.0 * audioChannels),
-                                     audioEnd ? 1 : 0, playing ? 1 : 0);
-                        std::fclose(status);
-                    }
+                    diag::Log("audio", "channels=%d bufferFrames=%u queue=%.1fs end=%d playing=%d",
+                              audioChannels, audioBufferFrames,
+                              static_cast<double>(audioQueue.size()) / (48000.0 * audioChannels),
+                              audioEnd ? 1 : 0, playing ? 1 : 0);
                 }
                 UINT32 padding = 0;
                 if (FAILED(audioClient->GetCurrentPadding(&padding)))
@@ -521,13 +518,9 @@ namespace api
             }
 
             // one-line status for diagnosing silent machines
-            if (std::FILE *status = std::fopen("sandium_audio.txt", "w"))
-            {
-                std::fprintf(status, "available=%d render=%d channels=%d bufferFrames=%u\n",
-                             audioAvailable ? 1 : 0, audioRender ? 1 : 0,
-                             audioChannels, audioBufferFrames);
-                std::fclose(status);
-            }
+            diag::Log("audio", "available=%d render=%d channels=%d bufferFrames=%u",
+                      audioAvailable ? 1 : 0, audioRender ? 1 : 0,
+                      audioChannels, audioBufferFrames);
         }
     };
 #endif

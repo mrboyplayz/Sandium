@@ -22,7 +22,6 @@ subhook::Hook *resetGameHook;
 void ResetGameHookFunc()
 {
     subhook::ScopedHookRemove scopedRemove(resetGameHook);
-
     GetMainLuaManager()->CallHooks("ResetGame", "pre");
 
     api::GetSRLogger()->Log("Resetting game...");

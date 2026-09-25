@@ -12,6 +12,7 @@
 
 #include "Addon.hpp"
 #include "LuaManager.hpp"
+#include "NetRedirect.hpp"
 #include "api/Http.hpp"
 
 // Server media streaming.
@@ -19,16 +20,15 @@
 // The game server publishes content for clients via the master's HTTP endpoint:
 //   GET /stream/manifest.txt  -> one file name per line
 //   GET /stream/<name>        -> the file bytes
-// The client fetches the manifest once per launch and downloads every file
+// After joining the Noxus game server, the client fetches the manifest and downloads every file
 // into sandium/cache/, skipping ones already present. Lua addons pick the
 // files up through the ServerMedia table (Ready/Path) and feed them into the
 // existing Image/Video APIs.
 //
 // If the manifest contains init.lua, the server is publishing a whole client
 // addon: it is materialized as sandium/addons/server_stream (a real addon
-// folder) and loaded from the main thread via Tick(), so friends with a bare
-// Sandium install run the server's scripts, images and videos without
-// shipping any addon files themselves.
+// folder) and loaded from the main thread via Tick() only while connected to
+// that game server. A cached copy is never discovered as a local addon.
 
 namespace servermedia
 {
@@ -87,10 +87,11 @@ namespace servermedia
 
         void SyncThread()
         {
+            if (!netredirect::IsNoxusGame()) return;
             const std::string manifest = http::Get(MASTER_HOST, MASTER_HTTP_PORT,
                                                    "/stream/manifest.txt", 4000,
                                                    "SANDIUM_MASTER");
-            if (manifest.empty())
+            if (manifest.empty() || !netredirect::IsNoxusGame())
                 return;
 
             std::error_code ec;
@@ -123,6 +124,7 @@ namespace servermedia
 
             for (const auto &name : names)
             {
+                if (!netredirect::IsNoxusGame()) return;
                 const auto dest = CacheDir() / name;
 
                 // init.lua also materializes the streamed addon (re-read every
@@ -165,7 +167,7 @@ namespace servermedia
                 readyFiles[name] = std::filesystem::absolute(dest).string();
             }
 
-            if (hasInit)
+            if (hasInit && netredirect::IsNoxusGame())
             {
                 MaterializeAddon(initLua);
                 pendingAddon = true; // loaded on the main thread by Tick()
@@ -175,6 +177,7 @@ namespace servermedia
 
     void Sync()
     {
+        if (!netredirect::IsNoxusGame()) return;
         if (started.exchange(true))
             return;
         std::thread(SyncThread).detach();
@@ -182,12 +185,14 @@ namespace servermedia
 
     bool Ready(const std::string &name)
     {
+        if (!netredirect::IsNoxusGame()) return false;
         std::lock_guard<std::mutex> lock(filesMutex);
         return readyFiles.count(name) != 0;
     }
 
     std::string Path(const std::string &name)
     {
+        if (!netredirect::IsNoxusGame()) return {};
         std::lock_guard<std::mutex> lock(filesMutex);
         const auto it = readyFiles.find(name);
         return it == readyFiles.end() ? std::string() : it->second;
@@ -195,18 +200,28 @@ namespace servermedia
 
     void Tick()
     {
-        if (!pendingAddon.exchange(false))
+        if (!netredirect::IsNoxusGame())
             return;
+        Sync();
         if (!GetMainLuaManager())
-        {
-            pendingAddon = true; // try again next frame
             return;
-        }
 
-        // Already registered this process? (downloaded mid-session earlier)
+        // Keep the Lua state alive across disconnects. Its hooks are gated by
+        // IsNoxusGame; unloading it here can invalidate callbacks during reset.
         for (const auto &existing : GetAddons())
             if (existing->ID() == "server_stream")
+            {
+                if (!existing->IsLoaded() && Ready("init.lua"))
+                {
+                    existing->Load();
+                    if (existing->IsLoaded() && !existing->IsDisabled() &&
+                        existing->CheckDependencies())
+                        existing->PrepareLua(GetMainLuaManager(), false);
+                }
                 return;
+            }
+
+        if (!pendingAddon.exchange(false)) return;
 
         auto addon = std::make_unique<Addon>("sandium/addons/server_stream");
         addon->Load();

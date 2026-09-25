@@ -25,6 +25,93 @@ GATE_SESSION_SECONDS = 12 * 60 * 60
 GATE_CHALLENGE_SECONDS = 60
 GATE_MAX_FAILURES_PER_MINUTE = 5
 phones_by_key = {}
+PROFILES_PATH = Path('/opt/noxus-master/profiles.json')
+PROFILE_TICK_LIMIT = 30
+SNAPSHOT_TTL = 45
+profile_lock = threading.RLock()
+live_snapshot = {'name': SERVER_NAME, 'players': [], 'updated_at': 0}
+profiles = {}
+hs_action_lock = threading.Lock()
+hs_actions = deque()
+
+def load_profiles():
+    global profiles
+    try:
+        profiles = json.loads(PROFILES_PATH.read_text())
+    except (OSError, ValueError):
+        profiles = {}
+
+def save_profiles():
+    temp = PROFILES_PATH.with_suffix('.tmp')
+    temp.write_text(json.dumps(profiles, separators=(',', ':')))
+    temp.replace(PROFILES_PATH)
+
+def public_profile(record):
+    result = {key: record.get(key) for key in (
+        'name', 'phone', 'seconds_played', 'gender', 'head', 'skinColor',
+        'hairColor', 'hair', 'eyeColor')}
+    result['appearance_known'] = bool(record.get('appearance_known'))
+    result['playtime_known'] = bool(record.get('playtime_known'))
+    return result
+
+def assigned_profile(query):
+    matches = [(name, phone) for name, phone in phones_by_key.items()
+               if not name.startswith('udp:') and not name.replace('.', '').isdigit()
+               and (phone == query or name.casefold() == query.casefold())]
+    if len(matches) != 1:
+        return None
+    name, phone = matches[0]
+    return {'name': name, 'phone': phone, 'seconds_played': 0,
+            'appearance_known': False, 'playtime_known': False, 'online': False}
+
+def clean_appearance(value):
+    try:
+        return max(0, min(255, int(value)))
+    except (TypeError, ValueError):
+        return 0
+
+def accept_snapshot(data):
+    global live_snapshot
+    incoming = data.get('players')
+    if not isinstance(incoming, list) or len(incoming) > 128:
+        raise ValueError('invalid players')
+    current = time.time()
+    seen = set()
+    roster = []
+    with profile_lock:
+        for entry in incoming:
+            if not isinstance(entry, dict):
+                raise ValueError('invalid player')
+            name = str(entry.get('name', '')).strip()[:64]
+            raw_phone = entry.get('phoneNumber', '')
+            if isinstance(raw_phone, int) and raw_phone > 0:
+                phone = f'{raw_phone // 10000:03d}-{raw_phone % 10000:04d}'
+            else:
+                phone = str(raw_phone).strip()
+                if phone.isdigit() and len(phone) >= 5:
+                    phone = f'{int(phone) // 10000:03d}-{int(phone) % 10000:04d}'
+            if not name or not phone or phone in seen or not phone.replace('-', '').isdigit():
+                continue
+            seen.add(phone)
+            record = profiles.get(phone, {'seconds_played': 0, 'last_seen': current})
+            previous = float(record.get('last_seen', current))
+            if record.get('online') and current - previous <= SNAPSHOT_TTL:
+                record['seconds_played'] += max(0, min(PROFILE_TICK_LIMIT, current - previous))
+            record.update(name=name, phone=phone, last_seen=current, online=True,
+                          appearance_known=True, playtime_known=True)
+            for field in ('gender', 'head', 'skinColor', 'hairColor', 'hair', 'eyeColor'):
+                record[field] = clean_appearance(entry.get(field))
+            profiles[phone] = record
+            roster.append(public_profile(record))
+        for phone, record in profiles.items():
+            if phone not in seen:
+                record['online'] = False
+        live_snapshot = {'name': SERVER_NAME, 'players': roster, 'updated_at': current}
+        save_profiles()
+
+from head_renderer import render_head
+
+load_profiles()
 
 gate_password = {}
 gate_challenges = {}
@@ -320,6 +407,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == '/hs/action':
+            if not gate_is_authorized(self.client_address[0]):
+                self._send_json(403, {'ok': False})
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if length < 2 or length > 128:
+                    raise ValueError('invalid action')
+                action = json.loads(self.rfile.read(length)).get('action')
+                if action not in ('ready', 'solo-seeker', 'solo-hider'):
+                    raise ValueError('invalid action')
+            except (ValueError, TypeError, AttributeError):
+                self._send_json(400, {'ok': False})
+                return
+            with hs_action_lock:
+                if len(hs_actions) < 64:
+                    hs_actions.append((time.time(), self.client_address[0], action))
+            self._send_json(200, {'ok': True})
+            return
+        if parsed.path == '/api/server-snapshot':
+            if self.client_address[0] not in ('127.0.0.1', '::1'):
+                self._send_json(403, {'ok': False})
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if length < 2 or length > 32768:
+                    raise ValueError('invalid body length')
+                accept_snapshot(json.loads(self.rfile.read(length)))
+            except (ValueError, TypeError, OSError):
+                self._send_json(400, {'ok': False, 'error': 'invalid_snapshot'})
+                return
+            self._send_json(200, {'ok': True})
+            return
         if parsed.path != '/gate/login':
             self._send_json(404, {'ok': False})
             return
@@ -354,6 +474,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._log_request()
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
+        if path == '/hs/poll':
+            if self.client_address[0] not in ('127.0.0.1', '::1'):
+                self._send_json(404, {'ok': False})
+                return
+            with hs_action_lock:
+                actions = list(hs_actions)
+                hs_actions.clear()
+            body = ''.join(f'{ip} {action}\n' for when, ip, action in actions
+                           if time.time() - when < 10).encode('ascii')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == '/api/status':
+            with profile_lock:
+                fresh = time.time() - live_snapshot['updated_at'] <= SNAPSHOT_TTL
+                self._send_json(200, {
+                    'name': live_snapshot['name'],
+                    'online': fresh,
+                    'player_count': len(live_snapshot['players']) if fresh else 0,
+                    'players': live_snapshot['players'] if fresh else [],
+                    'updated_at': live_snapshot['updated_at'],
+                })
+            return
+        if path == '/api/profile':
+            query = urllib.parse.parse_qs(parsed.query).get('query', [''])[0].strip()
+            with profile_lock:
+                found = profiles.get(query)
+                if found is None and query:
+                    matches = [p for p in profiles.values()
+                               if p.get('name', '').casefold() == query.casefold()]
+                    if len(matches) == 1:
+                        found = matches[0]
+                if found is None and query:
+                    found = assigned_profile(query)
+                if found is None:
+                    self._send_json(404, {'error': 'profile_not_found'})
+                else:
+                    result = public_profile(found)
+                    result['online'] = bool(found.get('online') and
+                                            time.time() - live_snapshot['updated_at'] <= SNAPSHOT_TTL)
+                    self._send_json(200, result)
+            return
+        if path.startswith('/api/head/') and path.endswith('.png'):
+            phone = path[len('/api/head/'):-4]
+            with profile_lock:
+                profile = profiles.get(phone)
+            if profile is None:
+                self._send_json(404, {'error': 'profile_not_found'})
+                return
+            try:
+                body = render_head(profile)
+            except ImportError:
+                self._send_json(503, {'error': 'pillow_not_installed'})
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'public, max-age=60')
+            self.end_headers()
+            self.wfile.write(body)
+            return
         
         if path == '/gate/challenge':
             challenge = gate_new_challenge(self.client_address[0])

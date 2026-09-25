@@ -31,6 +31,7 @@ add_library(
     Addresses.cpp
     BetterCrashes.cpp
     CustomModels.cpp
+    Diagnostics.cpp
     Gate.cpp
     DirectJoin.cpp
     Hooks.cpp
@@ -38,9 +39,13 @@ add_library(
     ItemTypeExpansion.cpp
     ItemModels.cpp
     LuaManager.cpp
+    MenuBackground.cpp
     Paperdoll.cpp
     Phone.cpp
+    Playermodel.cpp
+    VideoSettings.cpp
     NetRedirect.cpp
+    NativeFreecam.cpp
     ServerMedia.cpp
     Roster.cpp
     Flags.cpp

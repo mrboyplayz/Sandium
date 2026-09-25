@@ -1,6 +1,7 @@
 #include "GrainShader.hpp"
 
 #include "PainShader.hpp"
+#include "Diagnostics.hpp"
 
 #include <glad/glad.h>
 
@@ -181,12 +182,8 @@ namespace grainshader
         if (!reported)
         {
             reported = true;
-            if (std::FILE *f = std::fopen("sandium_grain.txt", "w"))
-            {
-                std::fprintf(f, "ready=%d program=%u vao=%u pain=%.2f\n",
-                             ready ? 1 : 0, program, vao, pain01);
-                std::fclose(f);
-            }
+            diag::Log("grain", "ready=%d program=%u vao=%u pain=%.2f",
+                      ready ? 1 : 0, program, vao, pain01);
         }
 
         GLint viewport[4] = {};

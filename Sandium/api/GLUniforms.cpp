@@ -1,7 +1,10 @@
 #include "GLUniforms.hpp"
 
+#include "../Diagnostics.hpp"
+
 #include <subhook.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -20,6 +23,7 @@
 #include "../Addresses.hpp"
 
 #include "../CameraFX.hpp"
+#include "../Flags.hpp"
 #endif
 
 namespace api
@@ -34,6 +38,8 @@ namespace api
             using UniformMatrix4fvFn = void (*)(int, int, unsigned char, const float *);
             using Uniform3fvFn = void (*)(int, int, const float *);
             using Uniform3fFn = void (*)(int, float, float, float);
+            using Uniform4fvFn = void (*)(int, int, const float *);
+            using Uniform4fFn = void (*)(int, float, float, float, float);
             using GetIntegervFn = void (*)(unsigned int, int *);
 
             constexpr unsigned int GL_CURRENT_PROGRAM_VALUE = 0x8B8D;
@@ -44,7 +50,8 @@ namespace api
                 SEM_MODELVIEWPROJECTION = 0,
                 SEM_VIEWPOSITION = 1,
                 SEM_VIEWMATRIX = 2,
-                SEM_PROJECTIONMATRIX = 3
+                SEM_PROJECTIONMATRIX = 3,
+                SEM_ATMOCONSTANT = 4
             };
 
             std::mutex stateMutex;
@@ -127,6 +134,8 @@ namespace api
             UniformMatrix4fvFn realUniformMatrix4fv = nullptr;
             Uniform3fvFn realUniform3fv = nullptr;
             Uniform3fFn realUniform3f = nullptr;
+            Uniform4fvFn realUniform4fv = nullptr;
+            Uniform4fFn realUniform4f = nullptr;
             GetIntegervFn realGetIntegerv = nullptr;
 
             std::uint64_t Key(unsigned int program, int location)
@@ -156,6 +165,8 @@ namespace api
                         semantic = SEM_VIEWMATRIX;
                     else if (realGetUniformLocation(program, "projectionmatrix") == location)
                         semantic = SEM_PROJECTIONMATRIX;
+                    else if (realGetUniformLocation(program, "atmoconstant") == location)
+                        semantic = SEM_ATMOCONSTANT;
                 }
                 {
                     const std::lock_guard<std::mutex> lock(stateMutex);
@@ -192,6 +203,8 @@ namespace api
                         semantic = SEM_VIEWMATRIX;
                     else if (std::strcmp(name, "projectionmatrix") == 0)
                         semantic = SEM_PROJECTIONMATRIX;
+                    else if (std::strcmp(name, "atmoconstant") == 0)
+                        semantic = SEM_ATMOCONSTANT;
                     if (semantic != SEM_NONE)
                     {
                         const std::lock_guard<std::mutex> lock(stateMutex);
@@ -291,6 +304,45 @@ namespace api
                     capture.hasViewPosition = true;
                     ++capture.viewPosUploads;
                 }
+            }
+
+            float HideAndSeekFogMultiplier()
+            {
+                if (!addresses::IsInGame.ptr || !addresses::IsInGame.ptr->b1 ||
+                    flags::Get("hs_active") != "1")
+                    return 1.0f;
+                try
+                {
+                    const float value = std::stof(flags::Get("hs_fog_density"));
+                    return std::isfinite(value) ? std::max(1.0f, std::min(value, 100.0f)) : 1.0f;
+                }
+                catch (...)
+                {
+                    return 1.0f;
+                }
+            }
+
+            void HookUniform4fv(int location, int count, const float *value)
+            {
+                if (count == 1 && value &&
+                    SemanticFor(CurrentProgram(), location) == SEM_ATMOCONSTANT)
+                {
+                    const float multiplier = HideAndSeekFogMultiplier();
+                    if (multiplier > 1.0f)
+                    {
+                        float fogged[4] = {value[0] * multiplier, value[1], value[2], value[3]};
+                        realUniform4fv(location, count, fogged);
+                        return;
+                    }
+                }
+                realUniform4fv(location, count, value);
+            }
+
+            void HookUniform4f(int location, float x, float y, float z, float w)
+            {
+                if (SemanticFor(CurrentProgram(), location) == SEM_ATMOCONSTANT)
+                    x *= HideAndSeekFogMultiplier();
+                realUniform4f(location, x, y, z, w);
             }
 
             // ---- memory pointer patching -------------------------------------
@@ -393,6 +445,8 @@ namespace api
             realGetUniformLocation = reinterpret_cast<GetUniformLocationFn>(sdlGetProcAddress("glGetUniformLocation"));
             realUniform3fv = reinterpret_cast<Uniform3fvFn>(sdlGetProcAddress("glUniform3fv"));
             realUniform3f = reinterpret_cast<Uniform3fFn>(sdlGetProcAddress("glUniform3f"));
+            realUniform4fv = reinterpret_cast<Uniform4fvFn>(sdlGetProcAddress("glUniform4fv"));
+            realUniform4f = reinterpret_cast<Uniform4fFn>(sdlGetProcAddress("glUniform4f"));
             realGetIntegerv = reinterpret_cast<GetIntegervFn>(sdlGetProcAddress("glGetIntegerv"));
 
             // The game stores the driver pointers it resolved before we were
@@ -419,6 +473,12 @@ namespace api
                                  reinterpret_cast<std::uintptr_t>(&HookUniform3fv));
                     PatchPointer(reinterpret_cast<std::uintptr_t>(realUniform3f),
                                  reinterpret_cast<std::uintptr_t>(&HookUniform3f));
+                    if (realUniform4fv)
+                        PatchPointer(reinterpret_cast<std::uintptr_t>(realUniform4fv),
+                                     reinterpret_cast<std::uintptr_t>(&HookUniform4fv));
+                    if (realUniform4f)
+                        PatchPointer(reinterpret_cast<std::uintptr_t>(realUniform4f),
+                                     reinterpret_cast<std::uintptr_t>(&HookUniform4f));
                     // Once the matrix entry point is replaced, rescanning all
                     // private allocations cannot find that original pointer and
                     // only creates a race with later menu/game allocations.
@@ -512,22 +572,18 @@ namespace api
         {
 #if _WIN32
             const std::lock_guard<std::mutex> lock(stateMutex);
-            if (std::FILE *status = std::fopen("sandium_glcap.txt", "w"))
+            diag::Log("glcap", "programs=%zu", programCaptures.size());
+            for (const auto &entry : programCaptures)
             {
-                std::fprintf(status, "programs=%zu\n", programCaptures.size());
-                for (const auto &entry : programCaptures)
-                {
-                    const ProgramCapture &capture = entry.second;
-                    std::fprintf(status,
-                                 "program=%u mvpUploads=%u hasMvp=%d transpose=%d "
-                                 "viewPosUploads=%u viewPos=(%.1f,%.1f,%.1f)\n",
-                                 entry.first, capture.mvpUploads, capture.hasMvp ? 1 : 0,
-                                 capture.mvpTransposed ? 1 : 0, capture.viewPosUploads,
-                                 capture.hasViewPosition ? capture.viewPosition[0] : 0.0f,
-                                 capture.hasViewPosition ? capture.viewPosition[1] : 0.0f,
-                                 capture.hasViewPosition ? capture.viewPosition[2] : 0.0f);
-                }
-                std::fclose(status);
+                const ProgramCapture &capture = entry.second;
+                diag::Log("glcap",
+                          "program=%u mvpUploads=%u hasMvp=%d transpose=%d "
+                          "viewPosUploads=%u viewPos=(%.1f,%.1f,%.1f)",
+                          entry.first, capture.mvpUploads, capture.hasMvp ? 1 : 0,
+                          capture.mvpTransposed ? 1 : 0, capture.viewPosUploads,
+                          capture.hasViewPosition ? capture.viewPosition[0] : 0.0f,
+                          capture.hasViewPosition ? capture.viewPosition[1] : 0.0f,
+                          capture.hasViewPosition ? capture.viewPosition[2] : 0.0f);
             }
 #endif
         }

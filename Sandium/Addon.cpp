@@ -398,6 +398,10 @@ void DiscoverAddons()
     {
         if (std::filesystem::is_directory(entry.status()))
         {
+            // Downloaded server code is loaded only after joining that server.
+            // A cached copy must never run in Practice or on another server.
+            if (entry.path().filename() == "server_stream")
+                continue;
             if (entry.path().filename() == "sub_rosa")
             {
                 api::GetSandiumLogger()->Log("<yellow>Addon folder found using reserved name \"sub_rosa\", ignored.");

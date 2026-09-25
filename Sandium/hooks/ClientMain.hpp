@@ -23,6 +23,7 @@ void ClientMainHookFunc();
 #include "../CustomModels.hpp"
 #include "../structs/ItemType.hpp"
 #include "../structs/VehicleType.hpp"
+#include "../VideoSettings.hpp"
 
 subhook::Hook *clientMainHook;
 
@@ -86,6 +87,9 @@ void ClientMainHookFunc()
 #endif
 
     api::InitializeImages();
+#if _WIN32
+    videosettings::Install();
+#endif
     api::glcap::Install();
     api::InitializeVideos();
     GetMainLuaManager()->Initialize();

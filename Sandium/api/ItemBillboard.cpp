@@ -2,6 +2,7 @@
 
 #include "GLUniforms.hpp"
 #include "Text.hpp"
+#include "../Diagnostics.hpp"
 
 #include "../Addresses.hpp"
 
@@ -132,25 +133,17 @@ namespace api
             static unsigned int emptyFrames = 0;
             if (++emptyFrames % 120 == 0)
             {
-                if (std::FILE *status = std::fopen("sandium_billboard.txt", "w"))
-                {
-                    std::fprintf(status, "no candidate. camera=(%.1f,%.1f,%.1f)\n",
-                                 camera[0], camera[1], camera[2]);
-                    std::fclose(status);
-                }
+                diag::Log("billboard", "no candidate. camera=(%.1f,%.1f,%.1f)",
+                          camera[0], camera[1], camera[2]);
             }
             return;
         }
         static unsigned int hitFrames = 0;
         if (++hitFrames % 60 == 0)
         {
-            if (std::FILE *status = std::fopen("sandium_billboard.txt", "w"))
-            {
-                std::fprintf(status, "item typeID=%d dist=%.2f camera=(%.1f,%.1f,%.1f) itemPos=(%.2f,%.2f,%.2f)\n",
-                             bestItem->typeID, bestDistance, camera[0], camera[1], camera[2],
-                             bestItem->position.x, bestItem->position.y, bestItem->position.z);
-                std::fclose(status);
-            }
+            diag::Log("billboard", "item typeID=%d dist=%.2f camera=(%.1f,%.1f,%.1f) itemPos=(%.2f,%.2f,%.2f)",
+                      bestItem->typeID, bestDistance, camera[0], camera[1], camera[2],
+                      bestItem->position.x, bestItem->position.y, bestItem->position.z);
         }
 
         // the prompt itself floats a little above the item (Y is up in Sub Rosa)

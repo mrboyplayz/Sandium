@@ -7,10 +7,15 @@
 #include <stdexcept>
 #include <subhook.h>
 #include <utility>
+#include <thread>
+#include <chrono>
+#include <Windows.h>
 
 #include "Addon.hpp"
 #include "Addresses.hpp"
+#include "LocalHuman.hpp"
 #include "api/Logging.hpp"
+#include "api/Http.hpp"
 #include "api/Image.hpp"
 #include "api/Time.hpp"
 #include "api/Video.hpp"
@@ -321,6 +326,48 @@ void LuaManager::Initialize()
 		}
 		white->Draw(x, y, w, h, r, g, b, a);
 	};
+	uiTable["mouse"] = []() {
+		using MouseState = unsigned int (__cdecl *)(int *, int *);
+		using WindowSize = void (__cdecl *)(void *, int *, int *);
+		HMODULE sdl = GetModuleHandleA("SDL2.dll");
+		auto mouse = sdl ? reinterpret_cast<MouseState>(GetProcAddress(sdl, "SDL_GetMouseState")) : nullptr;
+		auto size = sdl ? reinterpret_cast<WindowSize>(GetProcAddress(sdl, "SDL_GetWindowSize")) : nullptr;
+		int x = 0, y = 0, w = 1024, h = 768;
+		unsigned int buttons = mouse ? mouse(&x, &y) : 0;
+		if (size && addresses::SDLWindowPtr.ptr && *addresses::SDLWindowPtr)
+			size(*addresses::SDLWindowPtr, &w, &h);
+		// Sub Rosa scales both UI axes by window width / 1024; on 16:9
+		// screens the visible virtual height is about 576, not 768.
+		return std::make_tuple(w > 0 ? x * 1024.0f / w : 0.0f,
+		                       w > 0 ? y * 1024.0f / w : 0.0f, (buttons & 1) != 0);
+	};
+	uiTable["keyPressed"] = [](int key) {
+		return key >= 0 && key <= 255 && (GetAsyncKeyState(key) & 1) != 0;
+	};
+	uiTable["unixTime"] = []() {
+		return std::chrono::duration<double>(
+			std::chrono::system_clock::now().time_since_epoch()).count();
+	};
+	uiTable["cursor"] = [](float x, float y) {
+		static std::shared_ptr<api::Image> pointer;
+		if (!pointer || !pointer->IsValid())
+		{
+			try { pointer = api::Image::LoadCore("texture/mouse01.png"); }
+			catch (...) { return; }
+			pointer->SetLayer(0);
+		}
+		// The game's cursor is stored in the center quadrant of a 128x128 atlas.
+		pointer->Draw(x - 64, y - 64, 128, 128);
+	};
+	sol::table hideSeekTable = this->_L->create_named_table("HideSeek");
+	hideSeekTable["Action"] = [](const std::string &action) {
+		if (action != "ready" && action != "solo-seeker" && action != "solo-hider") return;
+		std::thread([action]() {
+			try { http::PostJson("185.227.111.150", 80, "/hs/action",
+			    std::string("{\"action\":\"") + action + "\"}", 3000); }
+			catch (...) {}
+		}).detach();
+	};
 
 	sol::table gameTable = this->_L->create_named_table("Game");
 	gameTable["isInGame"] = []() { return addresses::IsInGame.ptr && addresses::IsInGame.ptr->b1; };
@@ -329,7 +376,7 @@ void LuaManager::Initialize()
 	mediaTable["Sync"] = &servermedia::Sync;
 	mediaTable["Ready"] = &servermedia::Ready;
 	mediaTable["Path"] = &servermedia::Path;
-	servermedia::Sync(); // kick off the download as soon as Lua is up
+	// Tick starts the download only after a Noxus game connection is active.
 	roster::Start(); // name -> phone roster for name highlighting
 	flags::Start(); // live server flags for streamed content
 
@@ -345,10 +392,7 @@ void LuaManager::Initialize()
 	};
 	humansTable["GetLocal"] = []() -> structs::Human *
 	{
-		for (std::size_t humanCount = 0; humanCount < structs::Human::VanillaCount; humanCount++)
-			if (addresses::Humans[humanCount].isActive.b1)
-				return &addresses::Humans[humanCount];
-		return nullptr;
+		return localhuman::Find().first;
 	};
 	
 	this->DefineGameTypes();

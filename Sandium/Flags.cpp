@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "api/Http.hpp"
+#include "NetRedirect.hpp"
 
 // Server-controlled flags: the server publishes name=value pairs in
 // /opt/subrosa/stream/flags.txt (served by the master at /stream/flags.txt);
@@ -20,7 +21,7 @@ namespace flags
     {
         constexpr const char *MASTER_HOST = "185.227.111.150";
         constexpr uint16_t MASTER_HTTP_PORT = 80;
-        constexpr int POLL_SECONDS = 2;
+        constexpr int POLL_MILLISECONDS = 500;
 
         std::atomic<bool> started{false};
         std::mutex mapMutex;
@@ -60,12 +61,20 @@ namespace flags
         {
             for (;;)
             {
-                const std::string body = http::Get(MASTER_HOST, MASTER_HTTP_PORT,
-                                                   "/stream/flags.txt", 3000,
-                                                   "SANDIUM_MASTER");
-                if (!body.empty())
-                    Apply(body);
-                std::this_thread::sleep_for(std::chrono::seconds(POLL_SECONDS));
+                if (netredirect::IsNoxusGame())
+                {
+                    const std::string body = http::Get(MASTER_HOST, MASTER_HTTP_PORT,
+                                                       "/stream/flags.txt", 3000,
+                                                       "SANDIUM_MASTER");
+                    if (!body.empty() && netredirect::IsNoxusGame())
+                        Apply(body);
+                }
+                else
+                {
+                    std::lock_guard<std::mutex> lock(mapMutex);
+                    flagValues.clear();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(POLL_MILLISECONDS));
             }
         }
     }
@@ -79,6 +88,7 @@ namespace flags
 
     std::string Get(const std::string &name)
     {
+        if (!netredirect::IsNoxusGame()) return {};
         std::lock_guard<std::mutex> lock(mapMutex);
         const auto it = flagValues.find(name);
         return it == flagValues.end() ? std::string() : it->second;

@@ -19,6 +19,11 @@
 
 namespace api
 {
+    namespace
+    {
+        thread_local bool loadingCoreAsset = false;
+    }
+
     std::filesystem::path ResolveAddonMediaPath(const std::string &relativePath)
     {
         if (relativePath.empty())
@@ -38,14 +43,31 @@ namespace api
                 throw std::runtime_error("Media paths must be relative to the addon folder");
             return resolvedAbs;
         }
-        Addon *addon = GetMainLuaManager()->GetCurrentAddon();
+        Addon *addon = loadingCoreAsset ? nullptr : GetMainLuaManager()->GetCurrentAddon();
         if (!addon)
         {
             // Built-in Sandium assets are loaded outside a Lua addon context.
-            // Keep that exception confined to sandium/models so Lua's addon
-            // sandbox remains unchanged.
-            const auto modelRoot = std::filesystem::weakly_canonical("sandium/models");
-            const auto resolved = std::filesystem::weakly_canonical(requested);
+            // Resolve them beside the running game instead of against the
+            // process working directory. Launchers are free to inherit a
+            // different working directory (Noxus does), while the asset tree
+            // always lives beside subrosa.exe.
+            std::filesystem::path gameRoot = std::filesystem::current_path();
+#if _WIN32
+            std::wstring executablePath(32768, L'\0');
+            const DWORD executableLength = GetModuleFileNameW(
+                nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
+            if (executableLength > 0 && executableLength < executablePath.size())
+            {
+                executablePath.resize(executableLength);
+                gameRoot = std::filesystem::path(executablePath).parent_path();
+            }
+#endif
+            // Permit the game's own cursor atlas for Sandium's custom lobby.
+            // Other core media remain confined to sandium/models.
+            if (requested == std::filesystem::path("texture/mouse01.png"))
+                return std::filesystem::weakly_canonical(gameRoot / requested);
+            const auto modelRoot = std::filesystem::weakly_canonical(gameRoot / "sandium/models");
+            const auto resolved = std::filesystem::weakly_canonical(gameRoot / requested);
             auto rootIt = modelRoot.begin(), pathIt = resolved.begin();
             for (; rootIt != modelRoot.end() && pathIt != resolved.end(); ++rootIt, ++pathIt)
                 if (*rootIt != *pathIt)
@@ -394,6 +416,23 @@ namespace api
 #endif
     }
 
+    std::shared_ptr<Image> Image::LoadCore(const std::string &path)
+    {
+        const bool previous = loadingCoreAsset;
+        loadingCoreAsset = true;
+        try
+        {
+            auto image = Load(path);
+            loadingCoreAsset = previous;
+            return image;
+        }
+        catch (...)
+        {
+            loadingCoreAsset = previous;
+            throw;
+        }
+    }
+
     void Image::Draw(float x, float y, float width, float height, float red, float green, float blue, float alpha)
     {
 #if _WIN32
@@ -427,6 +466,7 @@ namespace api
         int previousTexture = 0;
         using GetIntegerv = void (APIENTRY *)(unsigned int, int *);
         GL<GetIntegerv>("glGetIntegerv")(GL_TEXTURE_BINDING_2D_VALUE, &previousTexture);
+
         for (const auto &item : imageQueue)
         {
             if ((item.layer >= 0) != foreground) continue;

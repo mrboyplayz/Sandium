@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "Addon.hpp"
+#include "NetRedirect.hpp"
 
 #define LUAMANAGER_LUAADDONINDEX 500
 
@@ -57,7 +58,9 @@ public:
     {
         for (const std::shared_ptr<LuaHook> &hook : this->GetHooks())
         {
-            if (hook->active && hook->name == hookName && std::find(hook->flags.begin(), hook->flags.end(), hookFlag) != hook->flags.end())
+            if (hook->active && hook->name == hookName &&
+                (hook->addon->ID() != "server_stream" || netredirect::IsNoxusGame()) &&
+                std::find(hook->flags.begin(), hook->flags.end(), hookFlag) != hook->flags.end())
             {
                 this->SetCurrentAddon(hook->addon);
                 sol::protected_function_result result = hook->function(std::forward<Args>(args)...);

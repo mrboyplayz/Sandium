@@ -14,6 +14,9 @@ namespace api
         ~Image();
 
         static std::shared_ptr<Image> Load(const std::string &path);
+        // Loads a trusted built-in asset from the game's sandium/models tree,
+        // independent of whichever Lua addon is currently executing.
+        static std::shared_ptr<Image> LoadCore(const std::string &path);
         void Draw(float x, float y, float width, float height,
                   float red = 1.0f, float green = 1.0f,
                   float blue = 1.0f, float alpha = 1.0f);

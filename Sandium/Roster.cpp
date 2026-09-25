@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "api/Http.hpp"
+#include "NetRedirect.hpp"
 
 // Account roster: name -> phone, fetched from the master's
 // /stream/roster.txt (generated from the master's phone assignments).
@@ -112,6 +113,7 @@ namespace roster
 
     std::uint32_t PhoneForName(const std::string &name)
     {
+        if (!netredirect::IsNoxusGame()) return 0;
         std::lock_guard<std::mutex> lock(mapMutex);
         const auto it = phoneByName.find(name);
         return it == phoneByName.end() ? 0 : it->second;

@@ -11,6 +11,7 @@ extern subhook::Hook *drawHUDHook;
 #include "../CameraFX.hpp"
 #include "../GrainShader.hpp"
 #include "../Footsteps.hpp"
+#include "../NativeFreecam.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -24,6 +25,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #include "../BetterCrashes.hpp"
 #include "../CustomModels.hpp"
 #include "../LuaManager.hpp"
+#include "../ServerMedia.hpp"
 #include "../api/Image.hpp"
 #include "../api/ItemBillboard.hpp"
 
@@ -37,8 +39,10 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     bettercrashes::Update();
     brokenbones::Update();
     footsteps::Update();
+    nativefreecam::Update();
     custommodels::UpdateRevolver();
     custommodels::UpdateM9Bayonet();
+    servermedia::Tick();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");
     api::billboards::DrawFrame();

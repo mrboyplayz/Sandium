@@ -21,7 +21,7 @@ namespace api
         void SetFieldOfView(int degrees);
 
         // Writes per-program capture state (upload counts, camera positions)
-        // to sandium_glcap.txt for diagnosing wrong-pass captures.
+        // to the shared sandium_log.txt for diagnosing wrong-pass captures.
         void DumpDiagnostics();
 
         // Last uploaded camera view matrix / position (any program).

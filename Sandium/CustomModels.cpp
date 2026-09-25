@@ -2,6 +2,7 @@
 
 #include "Addresses.hpp"
 #include "Flags.hpp"
+#include "LocalHuman.hpp"
 #include "GeneratedBoomboxModel.hpp"
 #include "api/GLUniforms.hpp"
 #include "api/Image.hpp"
@@ -57,6 +58,8 @@ namespace custommodels
         bool m9Spawned = false;
         bool m9WasInGame = false;
         bool m9SpawnRequested = false;
+        bool m9HideSeekRoundSpawned = false;
+        int m9VisualItemID = -1;
         float m9StabBlend = 0.0f;
         std::string m9TypeID = "sandium:m9_bayonet";
         // Item origin sits at hand + this offset; the flipped mesh's handle
@@ -294,7 +297,7 @@ namespace custommodels
         // human-friendly degrees, but only ever give radians to the engine.
         // Keep the model aligned to its original grip; server Lua controls the
         // hand's actual hold/stab orientation through the wrist quaternion.
-        definition.primaryGripRotation = glm::radians(-160.0f);
+        definition.primaryGripRotation = glm::radians(20.0f);
         definition.secondaryGripStiffness = 0.0f;
         definition.secondaryGripRotation = 0.0f;
 
@@ -513,6 +516,8 @@ namespace custommodels
             m9Spawned = false;
             m9WasInGame = false;
             m9SpawnRequested = false;
+            m9HideSeekRoundSpawned = false;
+            m9VisualItemID = -1;
             m9StabBlend = 0.0f;
             return;
         }
@@ -522,52 +527,19 @@ namespace custommodels
             m9WasInGame = true;
         }
 
-        structs::Human *localHuman = nullptr;
-        int localHumanID = -1;
-        for (std::size_t h = 0; h < structs::Human::VanillaCount; ++h)
-        {
-            auto &human = addresses::Humans[h];
-            if (human.isActive.b1)
-            {
-                localHuman = &human;
-                localHumanID = static_cast<int>(h);
-                break;
-            }
-        }
+        const auto [localHuman, localHumanID] = localhuman::Find();
         if (!localHuman)
             return;
 
-        // The server publishes both offsets. Select locally from LMB so the
-        // mesh moves with the stab on the same frame without touching any
-        // rigid-body rotation, axis, velocity, or torque.
-        bool holdingM9 = false;
-        for (std::size_t i = 0; i < structs::Item::VanillaCount; ++i)
-        {
-            const auto &item = addresses::Items[i];
-            if (item.isActive.b1 && item.typeID == M9_BAYONET_TYPE &&
-                item.parentHumanID == localHumanID)
-            {
-                holdingM9 = true;
-                break;
-            }
-        }
-        const bool stabbing = holdingM9 && (localHuman->inputFlags & 1u) != 0;
-        structs::CVector3 streamedGrip;
-        const std::string gripFlag = flags::Get(stabbing ? "bayonet_gripstab" : "bayonet_grip");
-        if (ParseM9GripFlag(gripFlag, streamedGrip))
-            addresses::ItemTypes[M9_BAYONET_TYPE].rightHandOffset = streamedGrip;
-        const std::string rotationFlag = flags::Get(
-            stabbing ? "bayonet_gripstabrot" : "bayonet_griprot");
-        float streamedRotation = 0.0f;
-        if (std::sscanf(rotationFlag.c_str(), "%f", &streamedRotation) == 1)
-            addresses::ItemTypes[M9_BAYONET_TYPE].primaryGripRotation =
-                glm::radians(streamedRotation);
+        // Hide and Seek: the SERVER equips the seeker's knife into hand slot 0
+        // (modes/hideAndSeek.lua), and the custom M9 model renders for any item
+        // of that synced type. The old client-side "spawn a local visual knife
+        // when you are the seeker" hack was removed — it force-attached a second
+        // item into slot 0 and fought the server's knife.
 
-        // Hand placement belongs to the server (arm IK). The client keeps a
-        // single static item offset and never animates it: no per-frame
-        // sliding, no aim/fire path (see ConfigureM9BayonetType).
-        // Spawn only on explicit request (m9/knife chat, F8). Auto-spawning
-        // on join duplicates the server's knife with a loose second blade.
+        // Keep the same grip and rotation that the working /knife command uses.
+        // The server keeps its authoritative knife for damage and pickup rules;
+        // the local /knife item supplies the first-person model.
         if (m9Spawned || !m9ModelLoaded || !m9SpawnRequested)
             return;
 
@@ -600,7 +572,8 @@ namespace custommodels
         int itemID = -1;
         {
             subhook::ScopedHookRemove remove(createItemHook);
-            itemID = addresses::CreateItemFunc(M9_BAYONET_TYPE, &position, &velocity, &orientation);
+            itemID = addresses::CreateItemFunc(
+                M9_BAYONET_TYPE, &position, &velocity, &orientation);
         }
         if (itemID < 0 || itemID >= static_cast<int>(structs::Item::VanillaCount))
             return;
@@ -615,6 +588,7 @@ namespace custommodels
         }
         m9Spawned = true;
         m9SpawnRequested = false;
+        m9VisualItemID = -1;
         api::GetSandiumLogger()->Log("Spawned M9 Bayonet item {} for human {} in slot {}",
                                      itemID, localHumanID, slot);
     }

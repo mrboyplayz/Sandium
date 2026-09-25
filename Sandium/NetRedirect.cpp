@@ -1,5 +1,10 @@
 #include "NetRedirect.hpp"
 
+#include "Addresses.hpp"
+
+#include <atomic>
+#include <chrono>
+
 #include <subhook.h>
 
 #if _WIN32
@@ -23,6 +28,28 @@ namespace netredirect
 
         in_addr realMaster{};
         in_addr ourMaster{};
+        constexpr u_short gamePort = 27584;
+        std::atomic<long long> lastGamePacketMs{0};
+        std::atomic<bool> lastGamePeerWasNoxus{false};
+
+        long long ClockMs()
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        void ObserveGameDestination(const sockaddr *destination)
+        {
+            if (!destination || destination->sa_family != AF_INET) return;
+            const auto *peer = reinterpret_cast<const sockaddr_in *>(destination);
+            if (peer->sin_addr.s_addr == realMaster.s_addr) return;
+            const u_short port = ntohs(peer->sin_port);
+            // Master queries use 28015. Game traffic is in the 275xx range.
+            if (port < 27500 || port >= 28000) return;
+            lastGamePeerWasNoxus.store(peer->sin_addr.s_addr == ourMaster.s_addr &&
+                port == gamePort, std::memory_order_relaxed);
+            lastGamePacketMs.store(ClockMs(), std::memory_order_relaxed);
+        }
 
         bool RedirectDest(const sockaddr *&to, sockaddr_in &patched)
         {
@@ -45,6 +72,7 @@ namespace netredirect
         int WSAAPI SendtoHook(SOCKET s, const char *buf, int len, int flags,
                               const sockaddr *to, int tolen)
         {
+            ObserveGameDestination(to);
             sockaddr_in patched{};
             RedirectDest(to, patched);
             subhook::ScopedHookRemove remove(&sendtoHook);
@@ -53,6 +81,7 @@ namespace netredirect
 
         int WSAAPI ConnectHook(SOCKET s, const sockaddr *name, int namelen)
         {
+            ObserveGameDestination(name);
             sockaddr_in patched{};
             RedirectDest(name, patched);
             subhook::ScopedHookRemove remove(&connectHook);
@@ -81,5 +110,28 @@ namespace netredirect
         if (auto p = GetProcAddress(wsock, "connect"))
             connectHook.Install(p, &ConnectHook, subhook::HookFlag64BitOffset);
     }
+
+    bool IsNoxusGame()
+    {
+        if (!addresses::IsInGame.ptr || !addresses::IsInGame.ptr->b1)
+            return false;
+        if (!lastGamePeerWasNoxus.load(std::memory_order_relaxed))
+            return false;
+        const long long elapsed = ClockMs() - lastGamePacketMs.load(std::memory_order_relaxed);
+        return elapsed >= 0 && elapsed < 10000;
+    }
+
+    void ResetGameSession()
+    {
+        lastGamePeerWasNoxus.store(false, std::memory_order_relaxed);
+        lastGamePacketMs.store(0, std::memory_order_relaxed);
+    }
+}
+#else
+namespace netredirect
+{
+    void Install() {}
+    bool IsNoxusGame() { return false; }
+    void ResetGameSession() {}
 }
 #endif

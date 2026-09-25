@@ -32,10 +32,12 @@ int DrawMenuHookFunc(int unk);
 #include "../Version.hpp"
 #include "../Paperdoll.hpp"
 #include "../LuaManager.hpp"
+#include "../VideoSettings.hpp"
 #include "../api/Image.hpp"
 #include "../api/GLUniforms.hpp"
 #include "../Phone.hpp"
 #include "../ServerMedia.hpp"
+#include "../NetRedirect.hpp"
 
 subhook::Hook *drawMenuHook;
 
@@ -55,10 +57,12 @@ int DrawMenuHookFunc(int unk)
     if (gate::Locked())
         return 0; // gate UI replaces the menu until the password is accepted
 
+    servermedia::Tick();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawMenu", "post");
     api::EndLuaDrawing();
     api::FlushImageLayer(false);
+
 
     const auto finishMenu = [](int result)
     {
@@ -67,11 +71,10 @@ int DrawMenuHookFunc(int unk)
         return result;
     };
 
-    servermedia::Tick();
-
     if (!*addresses::IsInGame && *addresses::MenuTypeID == 0)
     {
         // The main menu is being drawn!
+        netredirect::ResetGameSession();
         phone::Assign();
         api::DrawText(fmt::format("Sub Rosa 0.{}{}", SANDIUM_GAME_VERSION_NUMBER, SANDIUM_GAME_VERSION_PATCH), 512.0f, 128.0f, 24.0f, glm::vec4(1.0f));    
         api::DrawText(fmt::format("Sandium {}", SANDIUM_VERSION), 512.0f, 128.0f + 22.0f, 16.0f, glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));    
@@ -125,6 +128,7 @@ int DrawMenuHookFunc(int unk)
 
         if (*addresses::MenuOptionsSectionID == 1)
         {
+            videosettings::Draw();
             int fieldOfView = api::glcap::FieldOfView();
             *addresses::NextMenuButtonPositionX = 4.0f;
             *addresses::NextMenuButtonPositionY = 260.0f;
@@ -295,7 +299,8 @@ int DrawMenuHookFunc(int unk)
     }
 
     directjoin::DrawMenu();
-    return finishMenu(addresses::DrawMenuFunc(unk));
+    const int result = addresses::DrawMenuFunc(unk);
+    return finishMenu(result);
 }
 
 #endif
