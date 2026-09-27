@@ -1,8 +1,13 @@
+# WARNING!
+Sandium was partially vibecoded, use at your own risk.
+
 # Sandium and SandiumLauncher
-skibidi dop dop y es yes
 
 This project contains multiple modules... \
 Please check "Sandium" and "SandiumLauncher" folders.
+
+# Credits
+This project is a fork of [Suitium](https://github.com/jpxs-intl/Suitium) from JPXs.
 
 ## Compiling & Testing (For Windows)
 
