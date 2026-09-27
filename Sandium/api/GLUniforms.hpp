@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <cstdint>
 
 namespace api
@@ -23,6 +25,10 @@ namespace api
         // Writes per-program capture state (upload counts, camera positions)
         // to the shared sandium_log.txt for diagnosing wrong-pass captures.
         void DumpDiagnostics();
+
+        // Snapshot of every GL program the capture has seen (for modules that
+        // need to upload their own uniforms into the game's shaders).
+        std::vector<unsigned int> CapturedPrograms();
 
         // Last uploaded camera view matrix / position (any program).
         bool HasLastView();

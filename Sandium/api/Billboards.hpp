@@ -22,6 +22,7 @@ namespace api
         float height = 1.5f;
         float maxDistance = 0.0f; // 0 = unlimited
         float opacity = 1.0f;
+        float red = 1.0f, green = 1.0f, blue = 1.0f;
         bool visible = true;
 
         std::shared_ptr<Image> image;

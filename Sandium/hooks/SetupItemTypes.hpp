@@ -87,6 +87,7 @@ void SetupItemTypesHookFunc()
     {
         custommodels::ConfigureRevolverType();
         custommodels::ConfigureM9BayonetType();
+        custommodels::ConfigureFlashlightType();
     }
 
     GetMainLuaManager()->CallHooks("SetupItemTypes", "post");

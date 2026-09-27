@@ -1,0 +1,8 @@
+{
+  "id": "blood_particles",
+  "name": "Native Blood",
+  "description": "Sub Rosa blood hit effects and floor impacts in Practice Mode.",
+  "requires": [],
+  "conflicts": [],
+  "disabled": false
+}

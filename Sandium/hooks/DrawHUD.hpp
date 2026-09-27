@@ -12,6 +12,7 @@ extern subhook::Hook *drawHUDHook;
 #include "../GrainShader.hpp"
 #include "../Footsteps.hpp"
 #include "../NativeFreecam.hpp"
+#include "../NativeBloodEvents.hpp"
 
 void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #endif
@@ -28,6 +29,7 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d);
 #include "../ServerMedia.hpp"
 #include "../api/Image.hpp"
 #include "../api/ItemBillboard.hpp"
+#include "../api/Lighting.hpp"
 
 subhook::Hook *drawHUDHook;
 
@@ -42,6 +44,9 @@ void DrawHUDHookFunc(std::int64_t a, std::int64_t b, int c, int d)
     nativefreecam::Update();
     custommodels::UpdateRevolver();
     custommodels::UpdateM9Bayonet();
+    custommodels::UpdateFlashlight();
+    nativeblood::Poll();
+    api::lighting::DrawFrame();
     servermedia::Tick();
     api::BeginLuaDrawing();
     GetMainLuaManager()->CallHooks("DrawHUD", "post");

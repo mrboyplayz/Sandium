@@ -23,6 +23,8 @@ DataAddress<float> addresses::SunAngle;
 DataAddress<unsigned int> addresses::SunTime;
 DataAddress<structs::Item> addresses::Items;
 DataAddress<structs::Vehicle> addresses::Vehicles;
+DataAddress<std::uint8_t> addresses::EventRing;
+DataAddress<int> addresses::EventCount;
 DataAddress<char> addresses::AuthName;
 DataAddress<int> addresses::AuthStatus;
 DataAddress<structs::CBoolean> addresses::SteamEnabled;
@@ -62,6 +64,7 @@ FuncAddress<addresses::LoadTextureFuncType> addresses::LoadTextureFunc;
 FuncAddress<addresses::RegisterSoundPCMFuncType> addresses::RegisterSoundPCMFunc;
 FuncAddress<addresses::PlayPositionedSoundFuncType> addresses::PlayPositionedSoundFunc;
 FuncAddress<addresses::LineIntersectLevelFuncType> addresses::LineIntersectLevelFunc;
+FuncAddress<addresses::CreateEventBulletHitFuncType> addresses::CreateEventBulletHitFunc;
 FuncAddress<addresses::SurfaceMaterialLookupFuncType> addresses::SurfaceMaterialLookupFunc;
 FuncAddress<addresses::CreateVehicleFuncType> addresses::CreateVehicleFunc;
 FuncAddress<addresses::CSDrawAtlasEntryFuncType> addresses::CSDrawAtlasEntryFunc;
@@ -100,6 +103,8 @@ label_client: {}
     addresses::Humans.Register(baseAddress + DYNADDR(0x4329E308, 0x5D69CE48));
     addresses::Items.Register(baseAddress + DYNADDR(0x42BBB180, 0x12A7640));
     addresses::Vehicles.Register(baseAddress + DYNADDR(0x1F2D9200, 0xA8E2480));
+    addresses::EventRing.Register(baseAddress + DYNADDR(0x473DE460, 0x0));
+    addresses::EventCount.Register(baseAddress + DYNADDR(0x49C1DC64, 0x0));
 
     addresses::AuthName.Register(baseAddress + DYNADDR(0x11E4594C, 0x1C87CFEC));
     addresses::AuthStatus.Register(baseAddress + DYNADDR(0x2B165F40, 0x34C453D8));
@@ -150,6 +155,7 @@ label_client: {}
     addresses::RegisterSoundPCMFunc.Register(baseAddress + DYNADDR(0x69930, 0x0));
     addresses::PlayPositionedSoundFunc.Register(baseAddress + DYNADDR(0x69FA0, 0x0));
     addresses::LineIntersectLevelFunc.Register(baseAddress + DYNADDR(0xDC050, 0x0));
+    addresses::CreateEventBulletHitFunc.Register(baseAddress + DYNADDR(0x512D0, 0x0));
     addresses::SurfaceMaterialLookupFunc.Register(baseAddress + DYNADDR(0x12DE0, 0x0));
     addresses::CreateVehicleFunc.Register(baseAddress + DYNADDR(0x5BCA0, 0xC92B0));
     addresses::CSDrawAtlasEntryFunc.Register(baseAddress + DYNADDR(0x6D300, 0x0));

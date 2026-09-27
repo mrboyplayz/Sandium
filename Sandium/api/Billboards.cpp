@@ -146,7 +146,9 @@ namespace api
                 }
                 else if (billboard->image && billboard->image->IsValid())
                 {
-                    billboard->image->Draw(px, py, widthPx, heightPx, 1.0f, 1.0f, 1.0f, opacity);
+                    billboard->image->Draw(px, py, widthPx, heightPx,
+                                           billboard->red, billboard->green,
+                                           billboard->blue, opacity);
                 }
             }
         }

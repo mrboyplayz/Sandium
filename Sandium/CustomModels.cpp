@@ -3,6 +3,7 @@
 #include "Addresses.hpp"
 #include "Flags.hpp"
 #include "LocalHuman.hpp"
+#include "NetRedirect.hpp"
 #include "GeneratedBoomboxModel.hpp"
 #include "api/GLUniforms.hpp"
 #include "api/Image.hpp"
@@ -25,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 
 namespace custommodels
@@ -46,6 +48,7 @@ namespace custommodels
 
         constexpr int REVOLVER_TYPE = 46; // first genuinely expanded item slot
         constexpr int M9_BAYONET_TYPE = 47;
+        constexpr int FLASHLIGHT_TYPE = 48;
         constexpr int MAGNUM_TYPE = 5;
         constexpr int NINE_MM_TYPE = 11;
         bool revolverConfigured = false;
@@ -53,6 +56,11 @@ namespace custommodels
         bool revolverSpawned = false;
         bool revolverWasInGame = false;
         std::string revolverTypeID = "sandium:revolver";
+        bool flashlightConfigured = false;
+        bool flashlightModelLoaded = false;
+        std::string flashlightTypeID = "sandium:flashlight";
+        FlashlightRotation flashlightRotation{};
+        FlashlightGripOffset flashlightGripOffset{};
         bool m9Configured = false;
         bool m9ModelLoaded = false;
         bool m9Spawned = false;
@@ -265,6 +273,49 @@ namespace custommodels
     void ApplyM9GripRotation(float r);
     void LoadSavedM9Grip();
 
+    void ConfigureFlashlightType()
+    {
+        flashlightRotation = FlashlightRotation{};
+        flashlightGripOffset = FlashlightGripOffset{};
+        // Held one-handed like a pistol; no ammo, no attack — the client
+        // flashlight addon beams a spot light from the view while it is out.
+        auto *typeID = addresses::ItemTypes[FLASHLIGHT_TYPE].customData.typeIDPtr;
+        addresses::ItemTypes[FLASHLIGHT_TYPE] = addresses::ItemTypes[NINE_MM_TYPE];
+        addresses::ItemTypes[FLASHLIGHT_TYPE].customData.index = FLASHLIGHT_TYPE;
+        addresses::ItemTypes[FLASHLIGHT_TYPE].customData.typeIDPtr = typeID;
+        *typeID = flashlightTypeID;
+        addresses::ItemTypes[FLASHLIGHT_TYPE].SetName("Flashlight");
+        auto &flashlight = addresses::ItemTypes[FLASHLIGHT_TYPE];
+        flashlight.isGun = {};
+        flashlight.useAlternativeAim = {};
+        flashlight.ammoCount = 0;
+        flashlight.bulletTypeID = 0;
+        flashlight.bulletVelocity = 0.0f;
+        flashlight.bulletSpread = 0.0f;
+        flashlight.handCount = 1;
+        // Keep the grip fixed. The server moves the right-arm IK target so
+        // /flgrip carries the hand and the held item together.
+        flashlight.rightHandOffset =
+            structs::CVector3(0.0f, -0.02f, 0.0f);
+        GetItemTypeManager()->RegisterID("sandium", "flashlight", FLASHLIGHT_TYPE);
+        flashlightConfigured = true;
+        try
+        {
+            flashlightModelLoaded = itemmodels::Set(
+                addresses::ItemTypes[FLASHLIGHT_TYPE],
+                "sandium/models/flashlight/flashlight.cmo",
+                "sandium/models/flashlight/flashlight.png",
+                FlashlightMeshScale, FlashlightForwardPitchDegrees);
+        }
+        catch (const std::exception &error)
+        {
+            flashlightModelLoaded = false;
+            api::GetSandiumLogger()->Log("Flashlight model error: {}", error.what());
+        }
+        api::GetSandiumLogger()->Log("Registered sandium:flashlight as native item type {}",
+                                     FLASHLIGHT_TYPE);
+    }
+
     void ConfigureM9BayonetType()
     {
         auto *typeID = addresses::ItemTypes[M9_BAYONET_TYPE].customData.typeIDPtr;
@@ -450,6 +501,14 @@ namespace custommodels
         if (!revolverConfigured || !addresses::IsInGame.ptr)
             return;
 
+        // Noxus owns the inventory. A local revolver created on join can take
+        // the same item/hand slot as the seeker's server-owned knife.
+        if (netredirect::IsNoxusGame() || flags::Get("active_mode") == "hideAndSeek")
+        {
+            revolverSpawned = false;
+            return;
+        }
+
         const bool inGame = *addresses::IsInGame;
         if (!inGame)
         {
@@ -591,6 +650,49 @@ namespace custommodels
         m9VisualItemID = -1;
         api::GetSandiumLogger()->Log("Spawned M9 Bayonet item {} for human {} in slot {}",
                                      itemID, localHumanID, slot);
+    }
+
+    FlashlightRotation GetFlashlightRotation()
+    {
+        return flashlightRotation;
+    }
+
+    FlashlightGripOffset GetFlashlightGripOffset()
+    {
+        return flashlightGripOffset;
+    }
+
+    void UpdateFlashlight()
+    {
+        if (!flashlightConfigured)
+            return;
+        if (flashlightModelLoaded)
+            return;
+        const std::string localModel = "sandium/models/flashlight/flashlight.cmo";
+        const std::string localTexture = "sandium/models/flashlight/flashlight.png";
+        const std::string cacheModel = "sandium/cache/flashlight.cmo";
+        const std::string cacheTexture = "sandium/cache/flashlight.png";
+        const bool localAssets = std::filesystem::is_regular_file(localModel) &&
+            std::filesystem::is_regular_file(localTexture);
+        const std::string &model = localAssets ? localModel : cacheModel;
+        const std::string &texture = localAssets ? localTexture : cacheTexture;
+        if (!std::filesystem::is_regular_file(model) ||
+            !std::filesystem::is_regular_file(texture))
+            return;
+        try
+        {
+            flashlightModelLoaded = itemmodels::Set(
+                addresses::ItemTypes[FLASHLIGHT_TYPE], model, texture,
+                FlashlightMeshScale, FlashlightForwardPitchDegrees);
+            if (flashlightModelLoaded)
+            {
+                api::GetSandiumLogger()->Log("Loaded flashlight mesh from {}", model);
+            }
+        }
+        catch (const std::exception &error)
+        {
+            api::GetSandiumLogger()->Log("Flashlight pose error: {}", error.what());
+        }
     }
 
     void UpdateAndDraw()

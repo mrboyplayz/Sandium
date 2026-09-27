@@ -14,6 +14,7 @@
 #include "hooks/ClientMain.hpp"
 #include "hooks/ConnectMasterServer.hpp"
 #include "hooks/CreateItem.hpp"
+#include "hooks/CreateEventBulletHit.hpp"
 #include "hooks/CreateVehicle.hpp"
 #include "hooks/DrawMenu.hpp"
 #include "hooks/DrawHUD.hpp"
@@ -48,6 +49,9 @@ void InstallHooks()
     {
         {(void **)&addresses::ConnectMasterServerFunc.ptr, (void *)&ConnectMasterServerHookFunc, &connectMasterServerHook},
         {(void **)&addresses::CreateItemFunc.ptr, (void *)&CreateItemHookFunc, &createItemHook},
+#if _WIN32
+        {(void **)&addresses::CreateEventBulletHitFunc.ptr, (void *)&CreateEventBulletHitHookFunc, &createEventBulletHitHook},
+#endif
         {(void **)&addresses::CreateVehicleFunc.ptr, (void *)&CreateVehicleHookFunc, &createVehicleHook},
         {(void **)&addresses::CSDrawAtlasEntryFunc.ptr, (void *)&CSDrawAtlasEntryHookFunc, &csDrawAtlasEntryHook},
         {(void **)&addresses::CSDrawTextFunc.ptr, (void *)&CSDrawTextHookFunc, &csDrawTextHook},

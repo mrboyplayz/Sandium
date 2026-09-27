@@ -17,7 +17,10 @@ namespace itemmodels
     // collision representation is intentionally retained. Paths are relative
     // to the Sub Rosa directory. Safe to call again to swap either asset.
     bool Set(structs::ItemType &itemType, const std::string &cmoPath,
-             const std::string &texturePath);
+             const std::string &texturePath, float meshScale = 1.0f,
+             float forwardPitchDegrees = 0.0f, float yawDegrees = 0.0f,
+             float rollDegrees = 0.0f, float offsetX = 0.0f,
+             float offsetY = 0.0f, float offsetZ = 0.0f);
 
     // Reload only the skin PNG for an item type that already has a custom
     // model (Set must have run first in this session).

@@ -48,7 +48,8 @@ namespace
         for (std::size_t i = 0; i < structs::Item::VanillaCount; ++i)
         {
             const auto &item = addresses::Items[i];
-            if (item.isActive.b1 && item.typeID == 47 && item.parentHumanID == humanID)
+            if (item.isActive.b1 && item.typeID == 47 && item.parentHumanID == humanID &&
+                item.parentInventorySlotID >= 0 && item.parentInventorySlotID < 2)
                 return true;
         }
         return false;

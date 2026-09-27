@@ -1,7 +1,9 @@
 #include "VideoSettings.hpp"
 
 #include "Addresses.hpp"
+#include "Diagnostics.hpp"
 #include "Flags.hpp"
+#include "api/Lighting.hpp"
 #include "LuaManager.hpp"
 #include "api/Image.hpp"
 #include "api/Text.hpp"
@@ -256,6 +258,18 @@ namespace videosettings
                 api::FlushImageLayer(true);
                 api::FlushQueuedTexts();
             }
+            // Ground-truth window state into sandium_log.txt; the shared log
+            // dedupes consecutive identical lines, so only changes appear.
+            static unsigned int videoLogFrames = 0;
+            if (++videoLogFrames % 30 == 0 && getFlags && getSize && getPosition)
+            {
+                int w = 0, h = 0, x = 0, y = 0;
+                getSize(window, &w, &h);
+                getPosition(window, &x, &y);
+                diag::Log("video", "flags=0x%x size=%dx%d pos=%d,%d borderless=%d",
+                          getFlags(window), w, h, x, y, borderless ? 1 : 0);
+            }
+            api::lighting::ProbeFrame();
             originalSwap(window);
         }
 

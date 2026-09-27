@@ -7,4 +7,6 @@ if (WIN32)
 	add_subdirectory("SandiumLauncher")
 endif ()
 
-add_subdirectory("Tools/poser")
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tools/poser/CMakeLists.txt")
+	add_subdirectory("Tools/poser")
+endif ()

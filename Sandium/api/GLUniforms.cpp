@@ -588,6 +588,20 @@ namespace api
 #endif
         }
 
+        std::vector<unsigned int> CapturedPrograms()
+        {
+#if _WIN32
+            const std::lock_guard<std::mutex> lock(stateMutex);
+            std::vector<unsigned int> programs;
+            programs.reserve(programCaptures.size());
+            for (const auto &entry : programCaptures)
+                programs.push_back(entry.first);
+            return programs;
+#else
+            return {};
+#endif
+        }
+
         namespace
         {
 #if _WIN32

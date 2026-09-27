@@ -26,6 +26,9 @@ namespace addresses
     extern DataAddress<structs::Human> Humans;
     extern DataAddress<structs::Item> Items;
     extern DataAddress<structs::Vehicle> Vehicles;
+    // Native 0.38f 128-byte event ring; used to observe received blood hits.
+    extern DataAddress<std::uint8_t> EventRing;
+    extern DataAddress<int> EventCount;
 
     extern DataAddress<char> AuthName;
     extern DataAddress<int> AuthStatus;
@@ -113,6 +116,11 @@ namespace addresses
     using LineIntersectLevelFuncType = int (structs::CVector3 *start, structs::CVector3 *end,
                                             int includeCityObjects);
     extern FuncAddress<LineIntersectLevelFuncType> LineIntersectLevelFunc;
+    // Windows Sub Rosa 0.38f event ring writer (event type 1 = bullet hit).
+    using CreateEventBulletHitFuncType = void (int source, int hitType,
+                                              structs::CVector3 *position,
+                                              structs::CVector3 *normal);
+    extern FuncAddress<CreateEventBulletHitFuncType> CreateEventBulletHitFunc;
     using SurfaceMaterialLookupFuncType = int (unsigned int areaID, unsigned int blockX,
                                                unsigned int blockY, unsigned int blockZ,
                                                int faceMaterialSlot);

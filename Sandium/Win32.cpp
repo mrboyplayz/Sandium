@@ -7,6 +7,8 @@
 #include "Addresses.hpp"
 #include "Hooks.hpp"
 #include "Hotfixes.hpp"
+#include "ShaderLights.hpp"
+#include "ShadowNPC.hpp"
 #include "Version.hpp"
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
@@ -27,6 +29,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
             }
             
             InstallHooks();
+            shaderlights::Install();
+            shadownpc::Install();
             break;
         }
     }

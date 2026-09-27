@@ -22,6 +22,8 @@
 #include "api/Image.hpp"
 #include "api/Text.hpp"
 #include "api/Billboards.hpp"
+#include "api/Lighting.hpp"
+#include "api/BloodMarks.hpp"
 #include "ServerMedia.hpp"
 #include "Roster.hpp"
 #include "Flags.hpp"
@@ -227,6 +229,13 @@ void LuaManager::Initialize()
 		"viewPitch", &structs::Human::viewPitch,
 		"inputFlags", &structs::Human::inputFlags,
 		"health", &structs::Human::health,
+		"damage", &structs::Human::damage,
+		"bloodLevel", &structs::Human::bloodLevel,
+		"isBleeding", sol::property([](structs::Human &human) { return human.isBleeding.b1; }),
+		"index", [](structs::Human &human) -> int
+		{
+			return static_cast<int>(&human - addresses::Humans.ptr);
+		},
 		"headHealth", &structs::Human::headHealth,
 		"chestHealth", &structs::Human::torsoHealth,
 		"leftArmHealth", &structs::Human::leftArmHealth,
@@ -238,8 +247,54 @@ void LuaManager::Initialize()
 			if (index < 0 || index > 15)
 				index = 0;
 			return human.bones[index];
+		},
+		// Item currently in an inventory slot (0 left/offhand, 1 right/weapon
+		// hand, 2+ pockets). Returns nil for an empty slot.
+		"getSlotItem", [](structs::Human &human, int slot) -> structs::Item *
+		{
+			if (slot < 0 || slot > 5)
+				return nullptr;
+			const auto &s = human.inventorySlots[slot];
+			int id = s.firstPlaceItemID;
+			if (id < 0 || !addresses::Items[id].isActive.b1)
+				id = s.secondPlaceItemID;
+			if (id < 0 || !addresses::Items[id].isActive.b1)
+				return nullptr;
+			return &addresses::Items[id];
 		}
 	);
+
+	// Use Sub Rosa's native bullet-hit event writer in local Practice Mode.
+	// The game itself turns hit type 3 into blood particles/decal effects.
+	auto nativeBlood = this->_L->create_named_table("NativeBlood");
+	nativeBlood["Emit"] = [](const structs::CVector3 &position,
+	                         const structs::CVector3 &normal)
+	{
+		if (*addresses::IsDedicated || !*addresses::IsInGame ||
+		    !addresses::CreateEventBulletHitFunc.ptr)
+			return false;
+		structs::CVector3 hitPosition(position);
+		structs::CVector3 hitNormal(normal);
+		addresses::CreateEventBulletHitFunc(0, 3, &hitPosition, &hitNormal);
+		return true;
+	};
+	nativeBlood["Ground"] = [](const structs::CVector3 &position)
+	{
+		if (*addresses::IsDedicated || !*addresses::IsInGame ||
+		    !addresses::LineIntersectLevelFunc.ptr ||
+		    !addresses::LineIntersectResult.ptr)
+			return false;
+		structs::CVector3 start(position.x, position.y + 0.3f, position.z);
+		structs::CVector3 end(position.x, position.y - 3.0f, position.z);
+		const structs::LineIntersectResult saved = *addresses::LineIntersectResult.ptr;
+		const bool hit = addresses::LineIntersectLevelFunc(&start, &end, 1) != 0;
+		const structs::LineIntersectResult result = *addresses::LineIntersectResult.ptr;
+		*addresses::LineIntersectResult.ptr = saved;
+		if (!hit) return false;
+		api::bloodmarks::Add(result.position.x, result.position.y,
+		                     result.position.z, result.normal.y);
+		return true;
+	};
 
 	// World billboards: images/videos anchored to a world position,
 	// stretched to width x height (world units), faded by opacity, hidden
@@ -255,6 +310,9 @@ void LuaManager::Initialize()
 		"height", &api::Billboard::height,
 		"distance", &api::Billboard::maxDistance,
 		"opacity", &api::Billboard::opacity,
+		"red", &api::Billboard::red,
+		"green", &api::Billboard::green,
+		"blue", &api::Billboard::blue,
 		"visible", &api::Billboard::visible,
 		"SetPosition", [](api::Billboard &b, float x, float y, float z) { b.x = x; b.y = y; b.z = z; },
 		"Destroy", [](api::Billboard &b) { b.Destroy(); }
@@ -265,7 +323,9 @@ void LuaManager::Initialize()
 		auto billboard = std::make_shared<api::Billboard>();
 		sol::object image = opts["image"];
 		sol::object video = opts["video"];
-		if (image.is<std::string>())
+		if (image.is<std::shared_ptr<api::Image>>())
+			billboard->image = image.as<std::shared_ptr<api::Image>>();
+		else if (image.is<std::string>())
 			billboard->image = api::Image::Load(image.as<std::string>());
 		else if (video.is<std::shared_ptr<api::Video>>())
 			billboard->video = video.as<std::shared_ptr<api::Video>>();
@@ -278,10 +338,86 @@ void LuaManager::Initialize()
 		billboard->height = opts.get_or("height", 1.5f);
 		billboard->maxDistance = opts.get_or("distance", 0.0f);
 		billboard->opacity = opts.get_or("opacity", 1.0f);
+		billboard->red = opts.get_or("r", 1.0f);
+		billboard->green = opts.get_or("g", 1.0f);
+		billboard->blue = opts.get_or("b", 1.0f);
 		api::billboards::Register(billboard);
 		return billboard;
 	};
 	billboardsTable["Clear"] = []() { api::billboards::Clear(); };
+
+	// Lighting: additive glow light sources (XYZ or following a human).
+	// Lighting.Create{ x=,y=,z=, r=,g=,b=, radius=, intensity=,
+	//   human=<index>, offset={x,y,z}, ground=<bool> } -> Light
+	// The engine shader only knows a sun direction, so these are Sandium-
+	// rendered glows: depth-tested against the world, additive blending.
+	this->_L->new_usertype<api::Light>(
+		"Light",
+		sol::no_constructor,
+		"x", &api::Light::x,
+		"y", &api::Light::y,
+		"z", &api::Light::z,
+		"radius", &api::Light::radius,
+		"intensity", &api::Light::intensity,
+		"source", &api::Light::source,
+		"SetPosition", [](api::Light &light, float x, float y, float z) { light.SetPosition(x, y, z); },
+		"SetColor", [](api::Light &light, float r, float g, float b) { light.SetColor(r, g, b); },
+		"SetRadius", [](api::Light &light, float radius) { light.SetRadius(radius); },
+		"SetIntensity", [](api::Light &light, float intensity) { light.SetIntensity(intensity); },
+		"SetFollow", [](api::Light &light, int human, float ox, float oy, float oz) { light.SetFollow(human, ox, oy, oz); },
+		"SetGroundPool", [](api::Light &light, bool enable) { light.SetGroundPool(enable); },
+		"SetSourceVisible", [](api::Light &light, bool enable) { light.SetSourceVisible(enable); },
+		"SetDirection", [](api::Light &light, float dx, float dy, float dz) { light.SetDirection(dx, dy, dz); },
+		"SetCone", [](api::Light &light, float angleDegrees) { light.SetCone(angleDegrees); },
+		"Destroy", [](api::Light &light) { light.Destroy(); }
+	);
+	sol::table lightingTable = this->_L->create_named_table("Lighting");
+	lightingTable["Create"] = [](sol::table opts)
+	{
+		auto light = std::make_shared<api::Light>();
+		light->x = opts.get_or("x", 0.0f);
+		light->y = opts.get_or("y", 1.0f);
+		light->z = opts.get_or("z", 0.0f);
+		light->red = opts.get_or("r", 1.0f);
+		light->green = opts.get_or("g", 1.0f);
+		light->blue = opts.get_or("b", 1.0f);
+		light->radius = opts.get_or("radius", 2.0f);
+		light->intensity = opts.get_or("intensity", 1.0f);
+		light->source = opts.get_or("source", true);
+		light->groundPool = opts.get_or("ground", false);
+		sol::object angle = opts["angle"];
+		if (angle.is<float>() || angle.is<int>())
+			light->SetCone(angle.is<float>() ? angle.as<float>() : static_cast<float>(angle.as<int>()));
+		sol::object dir = opts["dir"];
+		if (dir.is<sol::table>())
+		{
+			sol::table dirTable = dir.as<sol::table>();
+			light->SetDirection(dirTable.get_or("x", 0.0f),
+			                    dirTable.get_or("y", 0.0f),
+			                    dirTable.get_or("z", 1.0f));
+		}
+		sol::object human = opts["human"];
+		if (human.is<int>())
+		{
+			sol::object offset = opts["offset"];
+			float ox = 0.0f, oy = 1.2f, oz = 0.0f;
+			if (offset.is<sol::table>())
+			{
+				sol::table offsetTable = offset.as<sol::table>();
+				ox = offsetTable.get_or("x", 0.0f);
+				oy = offsetTable.get_or("y", 1.2f);
+				oz = offsetTable.get_or("z", 0.0f);
+			}
+			light->SetFollow(human.as<int>(), ox, oy, oz);
+		}
+		api::lighting::Register(light);
+		return light;
+	};
+	lightingTable["Clear"] = []() { api::lighting::Clear(); };
+	// Master brightness multiplier for ALL lights (default 1, clamped 0.1-10).
+	// Set per-frame or once; combines with each light's own intensity.
+	lightingTable["SetBrightness"] = [](float brightness) { api::lighting::SetBrightness(brightness); };
+	lightingTable["GetBrightness"] = []() { return api::lighting::GetBrightness(); };
 	sol::table flagsTable = this->_L->create_named_table("ServerFlags");
 	flagsTable["Get"] = [](const std::string &name) { return flags::Get(name); };
 
@@ -371,6 +507,7 @@ void LuaManager::Initialize()
 
 	sol::table gameTable = this->_L->create_named_table("Game");
 	gameTable["isInGame"] = []() { return addresses::IsInGame.ptr && addresses::IsInGame.ptr->b1; };
+	gameTable["isNoxus"] = &netredirect::IsNoxusGame;
 
 	sol::table mediaTable = this->_L->create_named_table("ServerMedia");
 	mediaTable["Sync"] = &servermedia::Sync;
@@ -487,11 +624,18 @@ void LuaManager::DefineGameTypes()
 
 		"index", sol::property(&structs::ItemType::GetIndex),
 		"typeID", sol::property(&structs::ItemType::GetTypeID),
-		"SetModel", [](structs::ItemType &itemType, const std::string &cmoPath,
-					   const std::string &texturePath)
-		{
-			return itemmodels::Set(itemType, cmoPath, texturePath);
-		},
+		"SetModel", sol::overload(
+			[](structs::ItemType &itemType, const std::string &cmoPath,
+			   const std::string &texturePath)
+			{
+				return itemmodels::Set(itemType, cmoPath, texturePath);
+			},
+			[](structs::ItemType &itemType, const std::string &cmoPath,
+			   const std::string &texturePath, float meshScale, float forwardPitchDegrees)
+			{
+				return itemmodels::Set(itemType, cmoPath, texturePath,
+				                       meshScale, forwardPitchDegrees);
+			}),
 		"SetTexture", [](structs::ItemType &itemType, const std::string &texturePath)
 		{
 			return itemmodels::SetTexture(itemType, texturePath);
@@ -541,6 +685,8 @@ void LuaManager::DefineGameTypes()
 
 		"isActive", &structs::Item::isActive,
 		"type", sol::property(&structs::Item::GetType),
+		"typeID", &structs::Item::typeID,
+		"parentHumanID", &structs::Item::parentHumanID,
 
 		"position", &structs::Item::position,
 		"velocity", &structs::Item::velocity,

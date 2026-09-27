@@ -13,6 +13,9 @@ add_library(
     api/Image.cpp
     api/GLUniforms.cpp
     api/ItemBillboard.cpp
+    api/Lighting.cpp
+    api/BloodMarks.cpp
+    NativeBloodEvents.cpp
     api/Time.cpp
     api/Video.cpp
     api/Http.cpp
@@ -43,10 +46,12 @@ add_library(
     Paperdoll.cpp
     Phone.cpp
     Playermodel.cpp
+    ShadowNPC.cpp
     VideoSettings.cpp
     NetRedirect.cpp
     NativeFreecam.cpp
     ServerMedia.cpp
+    ShaderLights.cpp
     Roster.cpp
     Flags.cpp
     Footsteps.cpp
